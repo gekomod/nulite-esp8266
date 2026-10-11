@@ -13,3 +13,5 @@ Dane Wi-Fi należy ustawić lokalnie w kodzie urządzenia. Nie commituj prawdziw
 ## OTA
 
 Aktualizacja przez przeglądarkę jest możliwa tylko wtedy, gdy aktualnie działający firmware ma włączony endpoint OTA. Pierwsze wgranie lub odzyskiwanie urządzenia może wymagać USB.
+
+<!-- panel restoration in progress -->
