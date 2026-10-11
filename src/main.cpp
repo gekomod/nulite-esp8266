@@ -180,74 +180,118 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
   req[6] = crc & 0xFF;
   req[7] = crc >> 8;
 
-  // Jedna ponowna próba pomaga przy pojedynczym ucięciu/zakłóceniu bajtów na RS485.
-  // Nie zmieniamy automatycznie adresów ani prędkości — diagnostyka ma pokazać realny błąd.
   String firstErr;
   for (uint8_t attempt = 0; attempt < 2; attempt++) {
     while (rs485.available()) rs485.read();
-    delayMicroseconds(1500);
+    delay(4); // cisza między transakcjami RTU
 
-    rs485.write(req, 8);
+    rs485.write(req, sizeof(req));
     rs485.flush();
-    logFrame("TX: " + toHex(req, 8) + (attempt ? " [ponowienie]" : ""));
+    logFrame("TX: " + toHex(req, sizeof(req)) + (attempt ? " [ponowienie]" : ""));
 
     const size_t expected = 5 + 2 * count;
     uint8_t resp[260];
     size_t n = 0;
+    size_t discarded = 0;
     uint32_t t0 = millis(), tLast = 0;
-    while (n < sizeof(resp)) {
-      if (rs485.available()) {
-        int ch = rs485.read();
-        if (ch >= 0) {
-          resp[n++] = (uint8_t)ch;
-          tLast = millis();
-          // Odpowiedź wyjątku Modbus ma 5 bajtów; normalna odpowiedź ma expected.
-          if (n >= 2 && (resp[1] & 0x80) && n == 5) break;
-          if (n == expected) break;
-        }
-      } else {
-        if (n == 0 && millis() - t0 > mbTimeoutMs) break;
-        // Cisza między bajtami kończy ramkę; próg zwiększony, by ograniczyć
-        // fałszywe ucinanie odpowiedzi przy SoftwareSerial.
-        if (n > 0 && millis() - tLast > 40) break;
+    bool candidate = false;
+    size_t target = expected;
+
+    // Szukaj początku odpowiedzi należącej do TEGO zapytania. W szczególności
+    // odrzuć echo/obce ramki (np. 01 10...) zamiast liczyć ich bajty jako odpowiedź.
+    while (millis() - t0 < mbTimeoutMs && n < sizeof(resp)) {
+      if (!rs485.available()) {
+        if (candidate && n > 0 && millis() - tLast > 20) break;
         yield();
+        continue;
       }
+
+      int ch = rs485.read();
+      if (ch < 0) continue;
+      uint8_t byteIn = (uint8_t)ch;
+      tLast = millis();
+
+      if (!candidate) {
+        if (byteIn == slave) {
+          resp[0] = byteIn;
+          n = 1;
+          candidate = true;
+        } else {
+          discarded++;
+        }
+        continue;
+      }
+
+      if (n == 1) {
+        if (byteIn == fc || byteIn == (uint8_t)(fc | 0x80)) {
+          resp[n++] = byteIn;
+          if (byteIn & 0x80) target = 5;
+        } else {
+          discarded += n + 1;
+          n = 0;
+          candidate = false;
+          target = expected;
+          if (byteIn == slave) {
+            resp[0] = byteIn;
+            n = 1;
+            candidate = true;
+          }
+        }
+        continue;
+      }
+
+      resp[n++] = byteIn;
+      if (n == 3 && !(resp[1] & 0x80)) {
+        // Długość pochodzi z odpowiedzi. Oczekujemy dokładnie tylu bajtów,
+        // ile przewiduje zapytanie; nie wolno zaakceptować obcej długości.
+        if (resp[2] != count * 2) {
+          discarded += n;
+          n = 0;
+          candidate = false;
+          target = expected;
+          continue;
+        }
+        target = 5 + resp[2];
+      }
+      if (n == target) break;
     }
 
-    logFrame("RX: " + (n ? toHex(resp, n) : String("(brak)")) + (attempt ? " [ponowienie]" : ""));
-    mbLastRxLen = n;
-    mbLastRxHex = n ? toHex(resp, min<size_t>(n, 24)) : String();
-
     String currentErr;
-    if (n == 0) {
-      currentErr = "brak odpowiedzi (sprawdź A/B, adres, prędkość)";
-    } else if (n < 5) {
-      currentErr = "za krótka ramka (" + String(n) + " B)";
+    if (!candidate || n == 0) {
+      currentErr = "brak poprawnej odpowiedzi dla FC" + String(fc) +
+                   " (odrzucono " + String(discarded) + " bajtów obcych/szumów)";
     } else {
-      uint16_t calculatedCrc = crc16(resp, n - 2);
-      uint16_t receivedCrc = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
-      if (receivedCrc != calculatedCrc) {
-        char detail[80];
-        snprintf(detail, sizeof(detail), "błędne CRC: odebrano %04X, wyliczono %04X", receivedCrc, calculatedCrc);
-        currentErr = String(detail) + "; RX: " + toHex(resp, n);
-      } else if (resp[0] != slave) {
-        currentErr = "odpowiedź od innego adresu: " + String(resp[0]);
-      } else if (resp[1] & 0x80) {
-        currentErr = "wyjątek Modbus, kod " + String(resp[2]) +
-                     (resp[2] == 2 ? " (nieistniejący adres)" : "");
-      } else if (resp[1] != fc || resp[2] != count * 2 || n != expected) {
-        currentErr = "nieoczekiwana odpowiedź: funkcja/długość niezgodna";
+      logFrame("RX: " + toHex(resp, n) + (attempt ? " [ponowienie]" : ""));
+      mbLastRxLen = n;
+      mbLastRxHex = toHex(resp, min<size_t>(n, 24));
+
+      if (n < 5) {
+        currentErr = "niepełna ramka (" + String(n) + " B)";
       } else {
-        for (uint16_t i = 0; i < count; i++) {
-          out[i] = ((uint16_t)resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
+        uint16_t calculatedCrc = crc16(resp, n - 2);
+        uint16_t receivedCrc = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
+        if (receivedCrc != calculatedCrc) {
+          char detail[80];
+          snprintf(detail, sizeof(detail), "błędne CRC: odebrano %04X, wyliczono %04X", receivedCrc, calculatedCrc);
+          currentErr = String(detail) + "; RX: " + toHex(resp, n);
+        } else if (resp[0] != slave || (resp[1] != fc && resp[1] != (uint8_t)(fc | 0x80))) {
+          currentErr = "odpowiedź nie pasuje do zapytania";
+        } else if (resp[1] & 0x80) {
+          currentErr = "wyjątek Modbus, kod " + String(resp[2]) +
+                       (resp[2] == 2 ? " (nieistniejący adres)" : "");
+        } else if (resp[2] != count * 2 || n != expected) {
+          currentErr = "nieoczekiwana długość odpowiedzi";
+        } else {
+          for (uint16_t i = 0; i < count; i++)
+            out[i] = ((uint16_t)resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
+          return true;
         }
-        return true;
       }
     }
 
     if (attempt == 0) firstErr = currentErr;
     err = currentErr;
-    if (attempt == 0) delay(15);
+    if (attempt == 0) delay(20);
   }
 
   if (firstErr.length() && err != firstErr) err = firstErr + " | ponowienie: " + err;
