@@ -170,51 +170,88 @@ void logFrame(const String& line) {
 
 // Odczyt `count` rejestrow od `start` funkcja `fc` (3 lub 4). Zwraca true przy sukcesie.
 bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t* out, String& err) {
+  if ((fc != 3 && fc != 4) || count == 0 || count > 125) {
+    err = "nieprawidłowe parametry zapytania";
+    return false;
+  }
+
   uint8_t req[8] = { slave, fc, (uint8_t)(start >> 8), (uint8_t)start, (uint8_t)(count >> 8), (uint8_t)count };
   uint16_t crc = crc16(req, 6);
   req[6] = crc & 0xFF;
   req[7] = crc >> 8;
 
-  while (rs485.available()) rs485.read();  // wyczysc smieci
-  rs485.write(req, 8);
-  logFrame("TX: " + toHex(req, 8));
+  // Jedna ponowna próba pomaga przy pojedynczym ucięciu/zakłóceniu bajtów na RS485.
+  // Nie zmieniamy automatycznie adresów ani prędkości — diagnostyka ma pokazać realny błąd.
+  String firstErr;
+  for (uint8_t attempt = 0; attempt < 2; attempt++) {
+    while (rs485.available()) rs485.read();
+    delayMicroseconds(1500);
 
-  const size_t expected = 5 + 2 * count;
-  uint8_t resp[260];
-  size_t n = 0;
-  uint32_t t0 = millis(), tLast = 0;
-  while (n < sizeof(resp)) {
-    if (rs485.available()) {
-      resp[n++] = rs485.read();
-      tLast = millis();
-      if (n == expected) break;
-      if (n == 5 && (resp[1] & 0x80)) break;  // odpowiedz z wyjatkiem
-    } else {
-      if (n == 0 && millis() - t0 > mbTimeoutMs) break;   // brak odpowiedzi
-      if (n > 0 && millis() - tLast > 30) break;          // cisza na linii = koniec ramki
-      yield();
+    rs485.write(req, 8);
+    rs485.flush();
+    logFrame("TX: " + toHex(req, 8) + (attempt ? " [ponowienie]" : ""));
+
+    const size_t expected = 5 + 2 * count;
+    uint8_t resp[260];
+    size_t n = 0;
+    uint32_t t0 = millis(), tLast = 0;
+    while (n < sizeof(resp)) {
+      if (rs485.available()) {
+        int ch = rs485.read();
+        if (ch >= 0) {
+          resp[n++] = (uint8_t)ch;
+          tLast = millis();
+          // Odpowiedź wyjątku Modbus ma 5 bajtów; normalna odpowiedź ma expected.
+          if (n >= 2 && (resp[1] & 0x80) && n == 5) break;
+          if (n == expected) break;
+        }
+      } else {
+        if (n == 0 && millis() - t0 > mbTimeoutMs) break;
+        // Cisza między bajtami kończy ramkę; próg zwiększony, by ograniczyć
+        // fałszywe ucinanie odpowiedzi przy SoftwareSerial.
+        if (n > 0 && millis() - tLast > 40) break;
+        yield();
+      }
     }
-  }
-  logFrame("RX: " + (n ? toHex(resp, n) : String("(brak)")));
-  mbLastRxLen = n;
-  mbLastRxHex = n ? toHex(resp, min<size_t>(n, 24)) : String();
 
-  if (n == 0)                     { err = "brak odpowiedzi (sprawdź A/B, adres, prędkość)"; return false; }
-  if (n < 5)                      { err = "za krótka ramka (" + String(n) + " B)"; return false; }
-  uint16_t rc = crc16(resp, n - 2);
-  uint16_t rxCrc = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
-  if (rxCrc != rc) {
-    char detail[80];
-    snprintf(detail, sizeof(detail), "błędne CRC: odebrano %04X, wyliczono %04X", rxCrc, rc);
-    err = String(detail) + "; RX: " + toHex(resp, n);
-    return false;
-  }
-  if (resp[0] != slave)           { err = "odpowiedź od innego adresu: " + String(resp[0]); return false; }
-  if (resp[1] & 0x80)             { err = "wyjątek Modbus, kod " + String(resp[2]) + (resp[2] == 2 ? " (nieistniejący adres)" : ""); return false; }
-  if (resp[1] != fc || resp[2] != count * 2 || n != expected) { err = "nieoczekiwana długość odpowiedzi"; return false; }
+    logFrame("RX: " + (n ? toHex(resp, n) : String("(brak)")) + (attempt ? " [ponowienie]" : ""));
+    mbLastRxLen = n;
+    mbLastRxHex = n ? toHex(resp, min<size_t>(n, 24)) : String();
 
-  for (uint16_t i = 0; i < count; i++) out[i] = (resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
-  return true;
+    String currentErr;
+    if (n == 0) {
+      currentErr = "brak odpowiedzi (sprawdź A/B, adres, prędkość)";
+    } else if (n < 5) {
+      currentErr = "za krótka ramka (" + String(n) + " B)";
+    } else {
+      uint16_t calculatedCrc = crc16(resp, n - 2);
+      uint16_t receivedCrc = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
+      if (receivedCrc != calculatedCrc) {
+        char detail[80];
+        snprintf(detail, sizeof(detail), "błędne CRC: odebrano %04X, wyliczono %04X", receivedCrc, calculatedCrc);
+        currentErr = String(detail) + "; RX: " + toHex(resp, n);
+      } else if (resp[0] != slave) {
+        currentErr = "odpowiedź od innego adresu: " + String(resp[0]);
+      } else if (resp[1] & 0x80) {
+        currentErr = "wyjątek Modbus, kod " + String(resp[2]) +
+                     (resp[2] == 2 ? " (nieistniejący adres)" : "");
+      } else if (resp[1] != fc || resp[2] != count * 2 || n != expected) {
+        currentErr = "nieoczekiwana odpowiedź: funkcja/długość niezgodna";
+      } else {
+        for (uint16_t i = 0; i < count; i++) {
+          out[i] = ((uint16_t)resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
+        }
+        return true;
+      }
+    }
+
+    if (attempt == 0) firstErr = currentErr;
+    err = currentErr;
+    if (attempt == 0) delay(15);
+  }
+
+  if (firstErr.length() && err != firstErr) err = firstErr + " | ponowienie: " + err;
+  return false;
 }
 
 void pollRegisters() {
