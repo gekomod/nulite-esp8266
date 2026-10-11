@@ -196,6 +196,8 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
     uint8_t resp[260];
     size_t n = 0;
     size_t discarded = 0;
+    uint8_t noise[32];
+    size_t noiseLen = 0;
     uint32_t t0 = millis(), tLast = 0;
     bool candidate = false;
     size_t target = expected;
@@ -221,6 +223,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
           candidate = true;
         } else {
           discarded++;
+          if (noiseLen < sizeof(noise)) noise[noiseLen++] = byteIn;
         }
         continue;
       }
@@ -231,6 +234,8 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
           if (byteIn & 0x80) target = 5;
         } else {
           discarded += n + 1;
+          if (noiseLen < sizeof(noise)) noise[noiseLen++] = resp[0];
+          if (noiseLen < sizeof(noise)) noise[noiseLen++] = byteIn;
           n = 0;
           candidate = false;
           target = expected;
@@ -249,6 +254,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
         // ile przewiduje zapytanie; nie wolno zaakceptować obcej długości.
         if (resp[2] != count * 2) {
           discarded += n;
+          for (size_t q = 0; q < n && noiseLen < sizeof(noise); q++) noise[noiseLen++] = resp[q];
           n = 0;
           candidate = false;
           target = expected;
@@ -263,6 +269,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
     if (!candidate || n == 0) {
       currentErr = "brak poprawnej odpowiedzi dla FC" + String(fc) +
                    " (odrzucono " + String(discarded) + " bajtów obcych/szumów)";
+      if (noiseLen) currentErr += "; obce RX: " + toHex(noise, noiseLen);
     } else {
       logFrame("RX: " + toHex(resp, n) + (attempt ? " [ponowienie]" : ""));
       mbLastRxLen = n;
