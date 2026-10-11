@@ -676,14 +676,15 @@ void handleDiag() {
       if (duplicate || bd == lastBaud) continue;
       lastBaud = bd;
       beginRs485(bd, savedParity);
-      mbTimeoutMs = 220;
+      mbTimeoutMs = 60;
       for (uint8_t sl = 1; sl <= 10; sl++) {
         for (size_t ai = 0; ai < sizeof(starts)/sizeof(starts[0]); ai++) {
-          uint16_t vals[8] = {0};
+          uint16_t vals[1] = {0};
           String err;
           mbLastRxLen = 0;
           mbLastRxHex = "";
-          bool ok = mbRead(sl, 3, starts[ai], 8, vals, err);
+          // Pojedynczy rejestr skraca odpowiedz i czas calego zadania HTTP.
+          bool ok = mbRead(sl, 3, starts[ai], 1, vals, err);
           sent++;
           if (mbLastRxLen) replies++;
           if (ok) valid++;
@@ -694,7 +695,7 @@ void handleDiag() {
                     (ok ? "<b class='ok'>POPRAWNA ODPOWIEDŹ</b>" : err) +
                     "</td><td class='mono'>" + (mbLastRxHex.length() ? mbLastRxHex : "—") + "</td></tr>";
           }
-          delay(25);
+          delay(5);
           server.handleClient();
           ArduinoOTA.handle();
         }
