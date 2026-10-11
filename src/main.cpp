@@ -643,6 +643,67 @@ String sniff(uint32_t baud, uint8_t parity, uint32_t ms, size_t& total) {
   return toHex(buf, n);
 }
 
+// Stan skanera Modbus wykonywanego w krótkich żądaniach HTTP.
+bool wakeActive = false;
+size_t wakeBaudIndex = 0, wakeAddrIndex = 0;
+uint8_t wakeSlave = 1;
+int wakeSent = 0, wakeValid = 0, wakeReplies = 0;
+uint8_t wakeSavedSlave = 1, wakeSavedParity = 0;
+uint32_t wakeSavedBaud = 4800;
+uint16_t wakeSavedTimeout = 800;
+const uint32_t WAKE_BAUDS[] = { 4800, 9600, 19200 };
+const uint16_t WAKE_ADDRS[] = { 0, 200, 208, 248 };
+
+void restoreWakeScan() {
+  mbTimeoutMs = wakeSavedTimeout;
+  cfg.slave = wakeSavedSlave;
+  cfg.baud = wakeSavedBaud;
+  cfg.parity = wakeSavedParity;
+  beginRs485();
+  wakeActive = false;
+}
+
+void handleWakeStep() {
+  if (!wakeActive) {
+    server.send(409, "text/plain; charset=utf-8", "Brak aktywnego skanowania. Otworz /diag?wake=1.");
+    return;
+  }
+  while (wakeBaudIndex < sizeof(WAKE_BAUDS)/sizeof(WAKE_BAUDS[0]) &&
+         WAKE_BAUDS[wakeBaudIndex] == wakeSavedBaud) wakeBaudIndex++;
+  if (wakeBaudIndex >= sizeof(WAKE_BAUDS)/sizeof(WAKE_BAUDS[0])) {
+    restoreWakeScan();
+    server.send(200, "text/plain; charset=utf-8",
+      "DONE|Wysłano: " + String(wakeSent) + "|Poprawne: " + String(wakeValid) +
+      "|Odpowiedzi/ramki: " + String(wakeReplies));
+    return;
+  }
+  uint32_t baud = WAKE_BAUDS[wakeBaudIndex];
+  if (wakeAddrIndex == 0 && wakeSlave == 1) beginRs485(baud, wakeSavedParity);
+  uint16_t value = 0;
+  String err;
+  mbLastRxLen = 0;
+  mbLastRxHex = "";
+  mbTimeoutMs = 60;
+  bool ok = mbRead(wakeSlave, 3, WAKE_ADDRS[wakeAddrIndex], 1, &value, err);
+  wakeSent++;
+  if (ok) wakeValid++;
+  if (mbLastRxLen) wakeReplies++;
+  String line = String(baud) + " baud | slave " + String(wakeSlave) +
+    " | rejestr " + String(WAKE_ADDRS[wakeAddrIndex]) + " | " +
+    (ok ? "OK wartość=" + String(value) : err) +
+    (mbLastRxHex.length() ? " | RX " + mbLastRxHex : "");
+  wakeAddrIndex++;
+  if (wakeAddrIndex >= sizeof(WAKE_ADDRS)/sizeof(WAKE_ADDRS[0])) {
+    wakeAddrIndex = 0;
+    wakeSlave++;
+    if (wakeSlave > 10) {
+      wakeSlave = 1;
+      wakeBaudIndex++;
+    }
+  }
+  server.send(200, "text/plain; charset=utf-8", line);
+}
+
 void handleDiag() {
   String b = F("<div class='card'><h2>Nasłuch linii RS485</h2>"
                "<p class='muted'>ESP nic nie wysyła, tylko słucha przez 3 s na każdej prędkości. Jeśli coś przychodzi bez naszych zapytań, "
@@ -657,63 +718,26 @@ void handleDiag() {
                "<a class='btn' href='/diag?wake=1'>Wyślij zapytania FC03</a></div>");
 
   if (server.hasArg("wake")) {
-    // Aktywne sondowanie wyłącznie odczytem FC03; żadnych zapisów do pompy.
-    // Sprawdza typowe bloki mapy producenta i adresy slave 1..10.
-    const uint32_t bauds[] = { cfg.baud, 4800, 9600, 19200 };
-    const uint16_t starts[] = { 0, 200, 208, 248 };
-    const uint8_t savedSlave = cfg.slave;
-    const uint32_t savedBaud = cfg.baud;
-    const uint8_t savedParity = cfg.parity;
-    const uint16_t savedTimeout = mbTimeoutMs;
-    String rows;
-    int sent = 0, valid = 0, replies = 0;
-    uint32_t lastBaud = 0;
-    // Unikalne prędkości: ustawienia bieżące oraz popularne 4800/9600/19200.
-    for (size_t bi = 0; bi < sizeof(bauds)/sizeof(bauds[0]); bi++) {
-      uint32_t bd = bauds[bi];
-      bool duplicate = false;
-      for (size_t prev = 0; prev < bi; prev++) if (bauds[prev] == bd) duplicate = true;
-      if (duplicate || bd == lastBaud) continue;
-      lastBaud = bd;
-      beginRs485(bd, savedParity);
-      mbTimeoutMs = 60;
-      for (uint8_t sl = 1; sl <= 10; sl++) {
-        for (size_t ai = 0; ai < sizeof(starts)/sizeof(starts[0]); ai++) {
-          uint16_t vals[1] = {0};
-          String err;
-          mbLastRxLen = 0;
-          mbLastRxHex = "";
-          // Pojedynczy rejestr skraca odpowiedz i czas calego zadania HTTP.
-          bool ok = mbRead(sl, 3, starts[ai], 1, vals, err);
-          sent++;
-          if (mbLastRxLen) replies++;
-          if (ok) valid++;
-          if (ok || mbLastRxLen || err.indexOf("CRC") >= 0 || err.indexOf("wyjątek") >= 0) {
-            rows += "<tr><td>" + String(bd) + "</td><td>" + parityName(savedParity) +
-                    "</td><td>" + String(sl) + "</td><td>" + String(starts[ai]) +
-                    "–" + String(starts[ai] + 7) + "</td><td>" +
-                    (ok ? "<b class='ok'>POPRAWNA ODPOWIEDŹ</b>" : err) +
-                    "</td><td class='mono'>" + (mbLastRxHex.length() ? mbLastRxHex : "—") + "</td></tr>";
-          }
-          delay(5);
-          server.handleClient();
-          ArduinoOTA.handle();
-        }
-      }
-    }
-    mbTimeoutMs = savedTimeout;
-    cfg.slave = savedSlave;
-    cfg.baud = savedBaud;
-    cfg.parity = savedParity;
-    beginRs485();
-    b += "<div class='card'><h2>Aktywne zapytania FC03</h2><p>Wysłano " + String(sent) +
-         " zapytań odczytu, odebrano odpowiedź/ramkę w " + String(replies) +
-         " przypadkach, poprawnych odpowiedzi Modbus: <b>" + String(valid) +
-         "</b>. Test nie zapisuje żadnych parametrów pompy.</p>";
-    if (valid == 0) b += "<div class='alert'>Nie znaleziono poprawnej odpowiedzi. Sprawdź tabelę ramek TX/RX i upewnij się, że przewody są na CN22.</div>";
-    if (rows.length()) b += "<div class='tbl'><table><tr><th>Baud</th><th>Format</th><th>Slave</th><th>Rejestry</th><th>Wynik</th><th>RX</th></tr>" + rows + "</table></div>";
-    else b += "<p class='muted'>Nie odebrano żadnej ramki rozpoznanej jako odpowiedź. Pełny zapis TX/RX znajduje się w zakładce Ramki.</p>";
-    b += "</div>";
+    wakeSavedSlave = cfg.slave;
+    wakeSavedBaud = cfg.baud;
+    wakeSavedParity = cfg.parity;
+    wakeSavedTimeout = mbTimeoutMs;
+    wakeBaudIndex = 0;
+    wakeAddrIndex = 0;
+    wakeSlave = 1;
+    wakeSent = wakeValid = wakeReplies = 0;
+    wakeActive = true;
+    b += F("<div class='card'><h2>Skan Modbus FC03</h2>"
+      "<p>Test działa w krótkich żądaniach HTTP. Nie zapisuje parametrów pompy.</p>"
+      "<p id='wakeStatus'>Uruchamianie…</p><pre id='wakeLog' style='white-space:pre-wrap;max-height:55vh;overflow:auto'></pre>"
+      "<script>(async()=>{const st=document.getElementById('wakeStatus'),log=document.getElementById('wakeLog');"
+      "for(let i=0;i<140;i++){try{const r=await fetch('/wake-step?i='+i,{cache:'no-store'});"
+      "const t=await r.text();if(!r.ok){st.textContent='Błąd HTTP '+r.status+': '+t;break;}"
+      "if(t.startsWith('DONE|')){st.textContent=t.replaceAll('|',' · ');break;}"
+      "log.textContent+=t+'\\n';log.scrollTop=log.scrollHeight;st.textContent='Skan w toku — zapytań: '+(i+1);"
+      "}catch(e){st.textContent='Błąd połączenia: '+e;break;}}})();</script></div>");
+    sendPage("/diag", b);
+    return;
   }
 
   if (server.hasArg("sniff")) {
@@ -891,6 +915,7 @@ void setup() {
   server.on("/log", handleLog);
   server.on("/firmware", handleFirmware);
   server.on("/diag", handleDiag);
+  server.on("/wake-step", handleWakeStep);
   server.onNotFound([]() { server.send(404, "text/plain", "404"); });
   server.begin();
   MDNS.addService("http", "tcp", 80);
