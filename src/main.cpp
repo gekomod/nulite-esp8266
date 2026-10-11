@@ -28,17 +28,17 @@
 #include <EEPROM.h>
 
 // ---------------- KONFIGURACJA ----------------
-const char* WIFI_SSID = "USTAW_WIFI_SSID";
-const char* WIFI_PASS = "USTAW_WIFI_HASLO";
+const char* WIFI_SSID = "Xiaomi_E9C7";
+const char* WIFI_PASS = "nowak1234";
 const char* HOSTNAME  = "nulite";
 
 // Haslo do OTA (ArduinoOTA) i do strony /update (uzytkownik: admin)
-const char* OTA_PASS    = "USTAW_MOCNE_HASLO_OTA";
+const char* OTA_PASS    = "BV931Op1";
 const char* UPDATE_USER = "admin";
 
 // Awaryjna siec ESP, gdy nie ma polaczenia z routerem (strona: http://192.168.4.1)
 const char* AP_SSID = "Nulite-ESP";
-const char* AP_PASS = "USTAW_HASLO_AP";
+const char* AP_PASS = "BV931Op1";
 
 // Piny RS485
 const int PIN_RS485_RX = D6;
