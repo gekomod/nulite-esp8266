@@ -5,16 +5,10 @@
 #include <ArduinoOTA.h>
 #include <SoftwareSerial.h>
 
-// Ustaw dane Wi-Fi lokalnie przed kompilacją. Nie commituj haseł do repozytorium.
-#ifndef NULITE_WIFI_SSID
-#define NULITE_WIFI_SSID "UZUPELNIJ_WIFI_SSID"
-#endif
-#ifndef NULITE_WIFI_PASS
-#define NULITE_WIFI_PASS "UZUPELNIJ_WIFI_HASLO"
-#endif
-#ifndef NULITE_OTA_PASS
-#define NULITE_OTA_PASS "ZMIEN_TO_HASLO_OTA"
-#endif
+// Dane do lokalnej sieci Wi-Fi (repozytorium prywatne).
+#define NULITE_WIFI_SSID "Xiaomi_E9C7"
+#define NULITE_WIFI_PASS "nowak1234"
+#define NULITE_OTA_PASS "NuliteOTA-ChangeMe-8266"
 const char* WIFI_SSID=NULITE_WIFI_SSID;
 const char* WIFI_PASS=NULITE_WIFI_PASS;
 const char* HOSTNAME="nulite";
