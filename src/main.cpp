@@ -47,7 +47,7 @@ const int PIN_RS485_DE = D2;
 
 // Domyslne parametry Modbus (mozna zmienic na stronie /settings)
 const uint8_t  DEF_SLAVE  = 1;
-const uint32_t DEF_BAUD   = 9600;
+const uint32_t  DEF_BAUD   = 4800;
 const uint8_t  DEF_PARITY = 0;      // 0 = 8N1, 1 = 8E1, 2 = 8O1
 const uint16_t DEF_POLL_S = 10;     // co ile sekund odczyt
 
@@ -96,7 +96,7 @@ struct Config {
   uint8_t  parity;
   uint16_t pollSec;
 } cfg;
-const uint32_t CFG_MAGIC = 0x4E554C32;  // "NUL2": reset old EEPROM settings to manufacturer defaults (9600 8N1)
+const uint32_t CFG_MAGIC = 0x4E554C33;  // "NUL3": reset old EEPROM settings to the confirmed working 4800 8N1
 
 float    regValue[REG_COUNT];
 bool     regValid[REG_COUNT];
