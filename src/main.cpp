@@ -651,7 +651,10 @@ void handleDiag() {
                "<div class='card'><h2>Autowykrywanie parametrów</h2>"
                "<p class='muted'>Wysyła zapytanie o rejestr 0 (funkcje 03 i 04) dla prędkości 2400–38400, formatów 8N1/8E1/8O1 i adresów 1–10. "
                "Trwa ok. 1–2 minut — nie zamykaj strony. Zapytania są ograniczone do 8 rejestrów zgodnie z mapą producenta.</p>"
-               "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>");
+               "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>"
+               "<div class='card'><h2>Aktywne zapytania do pompy</h2>"
+               "<p class='muted'>Wysyła serię zapytań FC03 (sam odczyt) do slave 1–10 dla bloków 0–7, 200–207, 208–215 i 248–255. Testuje aktualną prędkość oraz 4800, 9600 i 19200, zachowując aktualny format bitów. Może potrwać kilkadziesiąt sekund.</p>"
+               "<a class='btn' href='/diag?wake=1'>Wyślij zapytania FC03</a></div>");
 
   if (server.hasArg("wake")) {
     // Aktywne sondowanie wyłącznie odczytem FC03; żadnych zapisów do pompy.
