@@ -1,5 +1,5 @@
 /*
- * NuliteESP - odczyt pompy ciepla Nulite 326/B2 przez Modbus RTU (RS485)
+ * NuliteESP - odczyt pompy ciepla Nulite NL-B345 przez Modbus RTU (RS485)
  * Plytka: LOLIN NodeMCU V3 (ESP8266)
  *
  * Funkcje:
@@ -52,9 +52,10 @@ const uint8_t  DEF_PARITY = 0;      // 0 = 8N1, 1 = 8E1, 2 = 8O1
 const uint16_t DEF_POLL_S = 10;     // co ile sekund odczyt
 
 // ---------------- MAPA REJESTROW ----------------
-// UWAGA: Nulite nie publikuje mapy rejestrow. Ponizsze wpisy to PRZYKLADY.
-// Uzyj skanera (http://nulite.local/scan), porownaj wartosci z wyswietlaczem
-// pompy i wpisz tu prawidlowe adresy / skale. Mozna dodac dowolnie wiele pozycji.
+// Oficjalna mapa producenta FLM RS485 Modbus: P00-P89 = adresy 0-89,
+// C00-C66 = adresy 200-266. Dane 16-bit signed; wartość = surowa * dokładność.
+// Producent: FC03 odczyt do 8 rejestrów, FC06 zapis pojedynczego rejestru.
+// Firmware odczytuje wyłącznie statusy Cxx; nie zapisuje parametrów Pxx.
 struct RegDef {
   const char* name;   // nazwa wyswietlana
   uint8_t  fc;        // 3 = holding, 4 = input
@@ -65,15 +66,17 @@ struct RegDef {
 };
 
 RegDef REGS[] = {
-  // Rejestry z mapy przekazanej przez użytkownika; adresy i skale według arkusza producenta.
-  { "Temperatura zewnętrzna",             3, 202, 0.5, true,  "°C" },
+  // Nazwy, adresy i dokładność przepisane z oficjalnego arkusza producenta.
+  { "Temperatura wężownicy zewnętrznej",   3, 200, 0.5, true,  "°C" },
+  { "Temperatura gazu tłocznego",           3, 201, 0.5, true,  "°C" },
+  { "Temperatura otoczenia",               3, 202, 0.5, true,  "°C" },
   { "Temperatura gazu powrotnego",         3, 203, 0.5, true,  "°C" },
   { "Temperatura wody",                    3, 208, 0.5, true,  "°C" },
   { "Temperatura CWU",                     3, 209, 0.5, true,  "°C" },
   { "Przepływ wody zewnętrzny",            3, 213, 1.0, false, "" },
   { "Przepływ wody wewnętrzny",            3, 214, 1.0, false, "" },
-  { "Ciśnienie wysokie",                   3, 217, 0.1, true,  "MPa" },
-  { "Ciśnienie niskie",                    3, 218, 0.1, true,  "MPa" },
+  { "Ciśnienie wysokie",                   3, 217, 0.1, false, "MPa" },
+  { "Ciśnienie niskie",                    3, 218, 0.1, false, "MPa" },
   { "Stan odszraniania",                   3, 227, 1.0, false, "" },
   { "Sprężarka",                           3, 230, 1.0, false, "" },
   { "Pompa wody",                          3, 233, 1.0, false, "" },
@@ -93,7 +96,7 @@ struct Config {
   uint8_t  parity;
   uint16_t pollSec;
 } cfg;
-const uint32_t CFG_MAGIC = 0x4E554C31;  // "NUL1"
+const uint32_t CFG_MAGIC = 0x4E554C32;  // "NUL2": reset old EEPROM settings to manufacturer defaults (9600 8N1)
 
 float    regValue[REG_COUNT];
 bool     regValid[REG_COUNT];
@@ -517,12 +520,13 @@ void handleScan() {
              "<div><label>Ilość (max 100)</label><input name='count' type='number' min=1 max=100 value='" + String(count) + "'></div>"
              "<div><button class='btn' name='go' value='1' style='width:100%'>Czytaj</button></div></div></form>"
              "<p class='muted'>Porównaj wartości z wyświetlaczem pompy — np. 45,5 °C będzie widoczne jako 455 (kolumna „÷10”). "
-             "Mapa producenta używa m.in. rejestrów C202, C203, C208–C218, C227, C230, C233 i C251–C259.</p></div>";
+             "Mapa producenta: P00–P89 (adresy 0–89) to parametry, C00–C66 (adresy 200–266) to statusy. " 
+             "Jedno zapytanie FC03 może obejmować maksymalnie 8 rejestrów.</p></div>";
 
   if (server.hasArg("go")) {
     String rows;
     int found = 0;
-    const uint16_t CHUNK = 10;
+    const uint16_t CHUNK = 8;
     for (uint16_t a = start; a < start + count; a += CHUNK) {
       uint16_t n = min<uint16_t>(CHUNK, start + count - a);
       uint16_t vals[CHUNK];
@@ -639,7 +643,7 @@ void handleDiag() {
                "<a class='btn' href='/diag?sniff=1'>Nasłuchuj</a></div>"
                "<div class='card'><h2>Autowykrywanie parametrów</h2>"
                "<p class='muted'>Wysyła zapytanie o rejestr 0 (funkcje 03 i 04) dla prędkości 2400–38400, formatów 8N1/8E1/8O1 i adresów 1–10. "
-               "Trwa ok. 1–2 minut — nie zamykaj strony.</p>"
+               "Trwa ok. 1–2 minut — nie zamykaj strony. Zapytania są ograniczone do 8 rejestrów zgodnie z mapą producenta.</p>"
                "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>");
 
   if (server.hasArg("sniff")) {
