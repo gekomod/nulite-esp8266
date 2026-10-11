@@ -588,7 +588,7 @@ void handleSettings() {
   String b = msg + "<div class='card'><h2>Transmisja Modbus RTU</h2><form method='post'><div class='row'>"
              "<div><label>Adres slave</label><input name='slave' type='number' min=1 max=247 value='" + String(cfg.slave) + "'></div>"
              "<div><label>Prędkość</label><select name='baud'>";
-  const uint32_t bauds[] = { 2400, 4800, 9600, 19200, 38400 };
+  const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
   for (uint32_t bd : bauds) b += "<option" + String(bd == cfg.baud ? " selected" : "") + ">" + String(bd) + "</option>";
   b += "</select></div><div><label>Format</label><select name='parity'>";
   for (uint8_t p = 0; p < 3; p++) b += "<option value=" + String(p) + (p == cfg.parity ? " selected" : "") + ">" + parityName(p) + "</option>";
@@ -651,7 +651,7 @@ int wakeSent = 0, wakeValid = 0, wakeReplies = 0;
 uint8_t wakeSavedSlave = 1, wakeSavedParity = 0;
 uint32_t wakeSavedBaud = 4800;
 uint16_t wakeSavedTimeout = 800;
-const uint32_t WAKE_BAUDS[] = { 4800, 9600, 19200 };
+const uint32_t WAKE_BAUDS[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
 const uint16_t WAKE_ADDRS[] = { 0, 200, 208, 248 };
 
 void restoreWakeScan() {
@@ -706,7 +706,7 @@ void handleWakeStep() {
 
 void handleDiag() {
   String b = F("<div class='card'><h2>Nasłuch linii RS485</h2>"
-               "<p class='muted'>ESP nic nie wysyła, tylko słucha przez 3 s na każdej prędkości. Jeśli coś przychodzi bez naszych zapytań, "
+               "<p class='muted'>ESP nic nie wysyła, tylko słucha przez 3 s na każdej prędkości (1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200). Jeśli coś przychodzi bez naszych zapytań, "
                "na tej linii rozmawiają już inne urządzenia (np. panel sterowania pompy) — wtedy ten port nie jest wolnym portem Modbus.</p>"
                "<a class='btn' href='/diag?sniff=1'>Nasłuchuj</a></div>"
                "<div class='card'><h2>Autowykrywanie parametrów</h2>"
@@ -714,7 +714,7 @@ void handleDiag() {
                "Trwa ok. 1–2 minut — nie zamykaj strony. Zapytania są ograniczone do 8 rejestrów zgodnie z mapą producenta.</p>"
                "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>"
                "<div class='card'><h2>Aktywne zapytania do pompy</h2>"
-               "<p class='muted'>Wysyła krótkie zapytania FC03 (sam odczyt pojedynczego rejestru) do slave 1–10 dla adresów 0, 200, 208 i 248. Testuje aktualną prędkość oraz 4800, 9600 i 19200, zachowując aktualny format bitów. Krótszy test ogranicza ryzyko przekroczenia limitu HTTP.</p>"
+               "<p class='muted'>Wysyła krótkie zapytania FC03 (sam odczyt pojedynczego rejestru) do slave 1–10 dla adresów 0, 200, 208 i 248. Testuje wszystkie popularne prędkości 1200–115200, pomijając aktualnie ustawioną, i zachowuje aktualny format bitów. Krótszy test ogranicza ryzyko przekroczenia limitu HTTP.</p>"
                "<a class='btn' href='/diag?wake=1'>Wyślij zapytania FC03</a></div>");
 
   if (server.hasArg("wake")) {
@@ -731,7 +731,7 @@ void handleDiag() {
       "<p>Test działa w krótkich żądaniach HTTP. Nie zapisuje parametrów pompy.</p>"
       "<p id='wakeStatus'>Uruchamianie…</p><pre id='wakeLog' style='white-space:pre-wrap;max-height:55vh;overflow:auto'></pre>"
       "<script>(async()=>{const st=document.getElementById('wakeStatus'),log=document.getElementById('wakeLog');"
-      "for(let i=0;i<140;i++){try{const r=await fetch('/wake-step?i='+i,{cache:'no-store'});"
+      "for(let i=0;i<400;i++){try{const r=await fetch('/wake-step?i='+i,{cache:'no-store'});"
       "const t=await r.text();if(!r.ok){st.textContent='Błąd HTTP '+r.status+': '+t;break;}"
       "if(t.startsWith('DONE|')){st.textContent=t.replaceAll('|',' · ');break;}"
       "log.textContent+=t+'\\n';log.scrollTop=log.scrollHeight;st.textContent='Skan w toku — zapytań: '+(i+1);"
@@ -741,7 +741,7 @@ void handleDiag() {
   }
 
   if (server.hasArg("sniff")) {
-    const uint32_t bauds[] = { 9600, 4800, 19200, 2400, 38400 };
+    const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
     for (uint32_t bd : bauds) {
       size_t total;
@@ -756,7 +756,7 @@ void handleDiag() {
   }
 
   if (server.hasArg("detect")) {
-    const uint32_t bauds[] = { 9600, 19200, 4800, 2400, 38400 };
+    const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
     int hits = 0;
     uint16_t savedTimeout = mbTimeoutMs;
