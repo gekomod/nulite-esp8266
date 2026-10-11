@@ -653,6 +653,65 @@ void handleDiag() {
                "Trwa ok. 1–2 minut — nie zamykaj strony. Zapytania są ograniczone do 8 rejestrów zgodnie z mapą producenta.</p>"
                "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>");
 
+  if (server.hasArg("wake")) {
+    // Aktywne sondowanie wyłącznie odczytem FC03; żadnych zapisów do pompy.
+    // Sprawdza typowe bloki mapy producenta i adresy slave 1..10.
+    const uint32_t bauds[] = { cfg.baud, 4800, 9600, 19200 };
+    const uint16_t starts[] = { 0, 200, 208, 248 };
+    const uint8_t savedSlave = cfg.slave;
+    const uint32_t savedBaud = cfg.baud;
+    const uint8_t savedParity = cfg.parity;
+    const uint16_t savedTimeout = mbTimeoutMs;
+    String rows;
+    int sent = 0, valid = 0, replies = 0;
+    uint32_t lastBaud = 0;
+    // Unikalne prędkości: ustawienia bieżące oraz popularne 4800/9600/19200.
+    for (size_t bi = 0; bi < sizeof(bauds)/sizeof(bauds[0]); bi++) {
+      uint32_t bd = bauds[bi];
+      bool duplicate = false;
+      for (size_t prev = 0; prev < bi; prev++) if (bauds[prev] == bd) duplicate = true;
+      if (duplicate || bd == lastBaud) continue;
+      lastBaud = bd;
+      beginRs485(bd, savedParity);
+      mbTimeoutMs = 220;
+      for (uint8_t sl = 1; sl <= 10; sl++) {
+        for (size_t ai = 0; ai < sizeof(starts)/sizeof(starts[0]); ai++) {
+          uint16_t vals[8] = {0};
+          String err;
+          mbLastRxLen = 0;
+          mbLastRxHex = "";
+          bool ok = mbRead(sl, 3, starts[ai], 8, vals, err);
+          sent++;
+          if (mbLastRxLen) replies++;
+          if (ok) valid++;
+          if (ok || mbLastRxLen || err.indexOf("CRC") >= 0 || err.indexOf("wyjątek") >= 0) {
+            rows += "<tr><td>" + String(bd) + "</td><td>" + parityName(savedParity) +
+                    "</td><td>" + String(sl) + "</td><td>" + String(starts[ai]) +
+                    "–" + String(starts[ai] + 7) + "</td><td>" +
+                    (ok ? "<b class='ok'>POPRAWNA ODPOWIEDŹ</b>" : err) +
+                    "</td><td class='mono'>" + (mbLastRxHex.length() ? mbLastRxHex : "—") + "</td></tr>";
+          }
+          delay(25);
+          server.handleClient();
+          ArduinoOTA.handle();
+        }
+      }
+    }
+    mbTimeoutMs = savedTimeout;
+    cfg.slave = savedSlave;
+    cfg.baud = savedBaud;
+    cfg.parity = savedParity;
+    beginRs485();
+    b += "<div class='card'><h2>Aktywne zapytania FC03</h2><p>Wysłano " + String(sent) +
+         " zapytań odczytu, odebrano odpowiedź/ramkę w " + String(replies) +
+         " przypadkach, poprawnych odpowiedzi Modbus: <b>" + String(valid) +
+         "</b>. Test nie zapisuje żadnych parametrów pompy.</p>";
+    if (valid == 0) b += "<div class='alert'>Nie znaleziono poprawnej odpowiedzi. Sprawdź tabelę ramek TX/RX i upewnij się, że przewody są na CN22.</div>";
+    if (rows.length()) b += "<div class='tbl'><table><tr><th>Baud</th><th>Format</th><th>Slave</th><th>Rejestry</th><th>Wynik</th><th>RX</th></tr>" + rows + "</table></div>";
+    else b += "<p class='muted'>Nie odebrano żadnej ramki rozpoznanej jako odpowiedź. Pełny zapis TX/RX znajduje się w zakładce Ramki.</p>";
+    b += "</div>";
+  }
+
   if (server.hasArg("sniff")) {
     const uint32_t bauds[] = { 9600, 4800, 19200, 2400, 38400 };
     String rows;
