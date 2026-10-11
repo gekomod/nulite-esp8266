@@ -52,7 +52,7 @@ const uint8_t  DEF_PARITY = 0;      // 0 = 8N1, 1 = 8E1, 2 = 8O1
 const uint16_t DEF_POLL_S = 10;     // co ile sekund odczyt
 
 // ---------------- MAPA REJESTROW ----------------
-// Oficjalna mapa producenta FLM RS485 Modbus: P00-P89 = adresy 0-89,
+// Oficjalna mapa producenta FLM RS485 Modbus: P00-P83 = adresy 0-83, P84-P89 = adresy 85-90 (adres 84 pominięty),
 // C00-C66 = adresy 200-266. Dane 16-bit signed; wartość = surowa * dokładność.
 // Producent: FC03 odczyt do 8 rejestrów, FC06 zapis pojedynczego rejestru.
 // Firmware odczytuje wyłącznie statusy Cxx; nie zapisuje parametrów Pxx.
@@ -519,8 +519,8 @@ void handleScan() {
              "<div><label>Od adresu</label><input name='start' type='number' min=0 max=65535 value='" + String(start) + "'></div>"
              "<div><label>Ilość (max 100)</label><input name='count' type='number' min=1 max=100 value='" + String(count) + "'></div>"
              "<div><button class='btn' name='go' value='1' style='width:100%'>Czytaj</button></div></div></form>"
-             "<p class='muted'>Porównaj wartości z wyświetlaczem pompy — np. 45,5 °C będzie widoczne jako 455 (kolumna „÷10”). "
-             "Mapa producenta: P00–P89 (adresy 0–89) to parametry, C00–C66 (adresy 200–266) to statusy. " 
+             "<p class='muted'>Porównaj wartości z wyświetlaczem pompy. Temperatury w mapie mają dokładność 0,5°C, a ciśnienia 0,1 MPa. "
+             "Mapa producenta: P00–P83 (adresy 0–83), P84–P89 (adresy 85–90; brak adresu 84) to parametry; C00–C66 (adresy 200–266) to statusy. " 
              "Jedno zapytanie FC03 może obejmować maksymalnie 8 rejestrów.</p></div>";
 
   if (server.hasArg("go")) {
