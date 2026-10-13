@@ -364,8 +364,6 @@ void pollRegisters() {
   commOk = true;
   lastError = "-";
   okCount++;
-  server.handleClient();
-  ArduinoOTA.handle();
 }
 
 // ---------------- WWW ----------------
@@ -492,6 +490,7 @@ uint8_t regDecimals(size_t i) {
 
 void handleRoot() {
   String b;
+  b.reserve(6000);
   b += "<div id='al' class='alert' style='display:" + String(commOk ? "none" : "block") + "'>" + lastError + "</div>";
   b += "<div class='tiles' id='tiles'>";
   for (size_t i = 0; i < REG_COUNT; i++) {
@@ -515,7 +514,7 @@ void handleRoot() {
   b += F("<script>"
          "const byId=id=>document.getElementById(id);"
          "let last=Date.now(),loading=false;"
-         "function load(){if(loading)return;loading=true;fetch('/api/data',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.json()}).then(d=>{"
+         "function load(){if(loading)return;loading=true;const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),4000);fetch('/api/data',{cache:'no-store',signal:ctl.signal}).then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.json()}).then(d=>{"
          "if(!Array.isArray(d.values))throw Error('Nieprawidłowe dane API');"
          "d.values.forEach((x,i)=>{let c=byId('c'+i),v=byId('v'+i);if(!c||!v)return;"
          "v.textContent=x.value===null?'—':Number(x.value).toFixed(x.dec);"
@@ -525,7 +524,7 @@ void handleRoot() {
          "if(dot)dot.className='dot'+(d.comm?'':' bad');if(st)st.textContent=d.comm?'Komunikacja OK':'Brak komunikacji';"
          "if(al){al.style.display=d.comm?'none':'block';al.textContent=d.lastError||'Brak odpowiedzi Modbus';}"
          "last=Date.now()-Number(d.pollAgo||0)*1000;"
-         "}).catch(e=>{let dot=byId('dot'),st=byId('st'),al=byId('al');if(dot)dot.className='dot bad';if(st)st.textContent='Błąd odczytu panelu';if(al){al.style.display='block';al.textContent='Nie można odczytać /api/data: '+e.message;}}).finally(()=>{loading=false})}"
+         "}).catch(e=>{let dot=byId('dot'),st=byId('st'),al=byId('al');if(dot)dot.className='dot bad';if(st)st.textContent='Błąd odczytu panelu';if(al){al.style.display='block';al.textContent='Nie można odczytać /api/data: '+(e.name==='AbortError'?'przekroczono czas odpowiedzi':e.message);}}).finally(()=>{clearTimeout(timer);loading=false})}"
          "setInterval(()=>{let ago=byId('ago');if(ago)ago.textContent=Math.round((Date.now()-last)/1000)+' s temu'},1000);"
          "load();setInterval(load,5000);"
          "</script>");
@@ -539,7 +538,9 @@ String jsonEscape(const String& s) {
 }
 
 void handleApi() {
-  String j = "{\"comm\":" + String(commOk ? "true" : "false") + ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
+  String j;
+  j.reserve(5000);
+  j = "{\"comm\":" + String(commOk ? "true" : "false") + ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
              ",\"uptime\":" + String(millis() / 1000) + ",\"pollAgo\":" + String((millis() - lastPoll) / 1000) +
              ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) + "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) +
              "\",\"validFrames\":" + String(validFrameCount) + ",\"crcErrors\":" + String(crcErrorCount) + ",\"timeouts\":" + String(timeoutCount) +
