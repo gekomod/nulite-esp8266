@@ -408,6 +408,8 @@ input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;align-items:end}
 .btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:10px 20px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
 .btn:hover{filter:brightness(1.1)}
+.btn.restart{background:#b91c1c;color:#fff;white-space:nowrap;padding:7px 12px;font-size:13px}
+.btn.restart:disabled{opacity:.55;cursor:wait}
 .btn.ghost{background:var(--chip);color:var(--text)}
 .term{background:#0a0f1a;color:#cbd5e1;padding:14px;border-radius:10px;overflow:auto;font:13px/1.7 ui-monospace,Consolas,monospace;margin:0;max-height:70vh}
 .term .tx{color:#93c5fd}.term .rx{color:#86efac}.term .no{color:#fca5a5}
@@ -452,7 +454,7 @@ void sendPage(const char* tab, const String& body) {
   p += F("<!doctype html><html lang='pl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta name='theme-color' content='#1e3a8a'><title>Pompa ciepła Nulite</title><style>");
   p += FPSTR(CSS);
-  p += F("</style></head><body><div class='top'><div class='wrap'><div class='brand'>");
+  p += F("</style><script>function restartDevice(){if(!confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.'))return;const b=document.querySelector('.btn.restart');if(b){b.disabled=true;b.textContent='Restartowanie…'}fetch('/restart',{method:'POST'}).then(()=>{document.body.insertAdjacentHTML('afterbegin',\"<div style='position:fixed;z-index:9999;top:12px;left:12px;right:12px;background:#166534;color:white;padding:14px;border-radius:10px;text-align:center\">Urządzenie uruchamia się ponownie. Poczekaj 10–20 sekund.</div>\")}).catch(()=>{if(b){b.textContent='Restart wysłany';}})}</script></head><body><div class='top'><div class='wrap'><div class='brand'>");
   p += FPSTR(LOGO_SVG);
   p += F("<div><h1>Pompa ciepła</h1><small>Nulite 326/B2</small></div><span class='pill'><span id='dot' class='dot");
   p += commOk ? "" : " bad";
@@ -462,7 +464,7 @@ void sendPage(const char* tab, const String& body) {
   for (auto& t : tabs) {
     p += "<a href='" + String(t[0]) + "'" + (strcmp(t[0], tab) == 0 ? " class='on'" : "") + ">" + t[1] + "</a>";
   }
-  p += F("</nav></div></div><main>");
+  p += F("<button class='btn restart' type='button' onclick='restartDevice()' title='Uruchom ponownie ESP'>⟳ Restart ESP</button></nav></div></div><main>");
   p += body;
   p += F("<footer>NuliteESP · ");
   p += WiFi.localIP().toString();
@@ -796,6 +798,11 @@ void setup() {
   server.on("/log", handleLog);
   server.on("/firmware", handleFirmware);
   server.on("/diag", handleDiag);
+  server.on("/restart", HTTP_POST, []() {
+    server.send(200, "text/plain; charset=utf-8", "Urządzenie uruchamia się ponownie. Odczekaj około 10–20 sekund i odśwież panel.");
+    delay(500);
+    ESP.restart();
+  });
 
   server.onNotFound([]() { server.send(404, "text/plain", "404"); });
   server.begin();
