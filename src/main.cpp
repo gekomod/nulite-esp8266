@@ -649,7 +649,13 @@ String sniff(uint32_t baud, uint8_t parity, uint32_t ms, size_t& total) {
 }
 
 void handleDiag() {
-  String b = F("<div class='card'><h2>Pasywny nasłuch RS485</h2>"
+  String b = "<div class='card'><h2>Ostatnia transakcja Modbus</h2><div class='stats'>"
+             "<div><div class='k'>Długość RX</div><div class='v'>" + String(mbLastRxLen) + " B</div></div>"
+             "<div><div class='k'>Poprawne ramki</div><div class='v'>" + String(validFrameCount) + "</div></div>"
+             "<div><div class='k'>Błędy CRC</div><div class='v'>" + String(crcErrorCount) + "</div></div>"
+             "<div><div class='k'>Brak odpowiedzi</div><div class='v'>" + String(timeoutCount) + "</div></div></div>"
+             "<p><b>Wynik:</b> " + mbLastFrameStatus + "</p><p class='mono'>" + mbLastRxHex + "</p></div>";
+  b += F("<div class='card'><h2>Pasywny nasłuch RS485</h2>"
                "<p class='muted'>Ta funkcja tylko odbiera bajty i nie wysyła komend. "
                "Odczyt operacyjny zgodny z dokumentacją wykonuje FC03 dla bloku 4100-4130.</p>"
                "<a class='btn' href='/diag?sniff=1'>Nasłuchuj przez 3 s na każdej prędkości</a></div>");
