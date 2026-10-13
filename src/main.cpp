@@ -28,6 +28,10 @@
 #include <EEPROM.h>
 
 // ---------------- KONFIGURACJA ----------------
+// TRYB BEZPIECZNY: wyłączona transmisja wychodząca do pompy.
+// Zablokowane są zarówno cykliczne odczyty, jak i ręczny skaner Modbus.
+// Odbiór/diagnostyka WWW i OTA pozostają aktywne.
+const bool MODBUS_TX_ENABLED = false;
 const char* WIFI_SSID = "Xiaomi_E9C7";
 const char* WIFI_PASS = "nowak1234";
 const char* HOSTNAME  = "nulite";
@@ -190,6 +194,11 @@ void logFrame(const String& line) {
 
 // Odczyt `count` rejestrow od `start` funkcja `fc` (3 lub 4). Zwraca true przy sukcesie.
 bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t* out, String& err) {
+  if (!MODBUS_TX_ENABLED) {
+    err = "Nadawanie Modbus wyłączone w firmware — brak zapytań wysyłanych do pompy.";
+    logFrame("TX BLOCKED: Modbus transmission disabled");
+    return false;
+  }
   if ((fc != 3 && fc != 4) || count == 0 || count > 125) {
     err = "nieprawidłowe parametry zapytania";
     return false;
