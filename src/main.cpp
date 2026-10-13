@@ -464,7 +464,7 @@ void sendPage(const char* tab, const String& body) {
   for (auto& t : tabs) {
     p += "<a href='" + String(t[0]) + "'" + (strcmp(t[0], tab) == 0 ? " class='on'" : "") + ">" + t[1] + "</a>";
   }
-  p += F("<button class='btn restart' type='button' onclick='restartDevice()' title='Uruchom ponownie ESP'>⟳ Restart ESP</button></nav></div></div><main>");
+  p += F("<a class='btn restart' href='/restart' onclick='return confirm(\'Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.\')' title='Uruchom ponownie ESP'>⟳ Restart ESP</a></nav></div></div><main>");
   p += body;
   p += F("<footer>NuliteESP · ");
   p += WiFi.localIP().toString();
@@ -798,11 +798,17 @@ void setup() {
   server.on("/log", handleLog);
   server.on("/firmware", handleFirmware);
   server.on("/diag", handleDiag);
-  server.on("/restart", HTTP_POST, []() {
-    server.send(200, "text/plain; charset=utf-8", "Urządzenie uruchamia się ponownie. Odczekaj około 10–20 sekund i odśwież panel.");
-    delay(500);
+  auto restartHandler = []() {
+    server.send(200, "text/html; charset=utf-8",
+      "<!doctype html><html lang='pl'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Restart ESP</title><body style='font:16px system-ui;max-width:600px;margin:15vh auto;padding:24px;background:#eef2f7;color:#14213d'>"
+      "<h2>Urządzenie uruchamia się ponownie</h2><p>Poczekaj 15–30 sekund, a następnie wróć do panelu.</p>"
+      "<p><a href='/'>Otwórz panel</a></p></body></html>");
+    delay(700);
     ESP.restart();
-  });
+  };
+  server.on("/restart", HTTP_GET, restartHandler);
+  server.on("/restart", HTTP_POST, restartHandler);
 
   server.onNotFound([]() { server.send(404, "text/plain", "404"); });
   server.begin();
