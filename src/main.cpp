@@ -107,8 +107,9 @@ struct Config {
   uint32_t baud;
   uint8_t  parity;
   uint16_t pollSec;
+  uint8_t rs485Mode; // 0=automatic direction, 1=manual DE/RE on D2
 } cfg;
-const uint32_t CFG_MAGIC = 0x4E554C34;  // "NUL4": reset old settings to documentation defaults 9600 8N1
+const uint32_t CFG_MAGIC = 0x4E554C35;  // NUL5: adds RS485 direction mode
 
 float    regValue[REG_COUNT];
 bool     regValid[REG_COUNT];
@@ -131,9 +132,10 @@ void loadConfig() {
   EEPROM.begin(64);
   EEPROM.get(0, cfg);
   if (cfg.magic != CFG_MAGIC || cfg.slave == 0 || cfg.baud < 1200 || cfg.baud > 115200 || cfg.parity > 2) {
-    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S };
+    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S, 0 };
   }
   if (cfg.pollSec < 2) cfg.pollSec = 2;
+  if (cfg.rs485Mode > 1) cfg.rs485Mode = 0;
 }
 
 void saveConfig() {
@@ -150,7 +152,8 @@ void beginRs485(uint32_t baud, uint8_t parity) {
   rs485.end();
   EspSoftwareSerial::Config c = parity == 1 ? SWSERIAL_8E1 : parity == 2 ? SWSERIAL_8O1 : SWSERIAL_8N1;
   rs485.begin(baud, c, PIN_RS485_RX, PIN_RS485_TX, false, 256);
-  rs485.setTransmitEnablePin(PIN_RS485_DE);
+  // Auto-direction modules handle TX/RX themselves; only manual transceivers use D2.
+  if (cfg.rs485Mode == 1) rs485.setTransmitEnablePin(PIN_RS485_DE);
 }
 
 void beginRs485() {
@@ -588,6 +591,7 @@ void handleSettings() {
     cfg.baud    = constrain(server.arg("baud").toInt(), 1200, 115200);
     cfg.parity  = constrain(server.arg("parity").toInt(), 0, 2);
     cfg.pollSec = constrain(server.arg("poll").toInt(), 2, 3600);
+    cfg.rs485Mode = constrain(server.arg("rs485mode").toInt(), 0, 1);
     saveConfig();
     beginRs485();
     msg = "<div class='toast'>Zapisano ustawienia — obowiązują od razu.</div>";
@@ -599,7 +603,11 @@ void handleSettings() {
   for (uint32_t bd : bauds) b += "<option" + String(bd == cfg.baud ? " selected" : "") + ">" + String(bd) + "</option>";
   b += "</select></div><div><label>Format</label><select name='parity'>";
   for (uint8_t p = 0; p < 3; p++) b += "<option value=" + String(p) + (p == cfg.parity ? " selected" : "") + ">" + parityName(p) + "</option>";
-  b += "</select></div><div><label>Odczyt co (s)</label><input name='poll' type='number' min=2 max=3600 value='" + String(cfg.pollSec) + "'></div>"
+  b += "</select></div><div><label>Sterowanie kierunkiem RS485</label><select name='rs485mode'>"
+       "<option value='0'" + String(cfg.rs485Mode == 0 ? " selected" : "") + ">Automatyczne (konwerter auto-direction)</option>"
+       "<option value='1'" + String(cfg.rs485Mode == 1 ? " selected" : "") + ">Ręczne DE/RE (D2)</option>"
+       "</select><p class='muted'>Wybierz automatyczne, jeśli moduł sam przełącza nadawanie i odbiór.</p></div>"
+       "<div><label>Odczyt co (s)</label><input name='poll' type='number' min=2 max=3600 value='" + String(cfg.pollSec) + "'></div>"
        "<div><button class='btn' style='width:100%'>Zapisz</button></div></div></form></div>"
        "<div class='card'><h2>Gdy nie ma komunikacji</h2><p class='muted'>"
        "<b>Błąd CRC</b> — sprawdź prędkość i format transmisji zgodny z dokumentacją.<br>"
