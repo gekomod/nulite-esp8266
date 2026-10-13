@@ -156,9 +156,20 @@ const char* parityName(uint8_t p) {
 
 void beginRs485(uint32_t baud, uint8_t parity) {
   rs485.end();
+
+  // Manual RS485 direction control: DE/RE on D2 is LOW while listening
+  // and is raised by SoftwareSerial only while transmitting.
+  // Set the safe receive state before attaching the transmit-enable pin.
+  if (cfg.rs485Mode == 1) {
+    pinMode(PIN_RS485_DE, OUTPUT);
+    digitalWrite(PIN_RS485_DE, LOW);
+  }
+
   EspSoftwareSerial::Config c = parity == 1 ? SWSERIAL_8E1 : parity == 2 ? SWSERIAL_8O1 : SWSERIAL_8N1;
   rs485.begin(baud, c, PIN_RS485_RX, PIN_RS485_TX, false, 256);
-  // Auto-direction modules handle TX/RX themselves; only manual transceivers use D2.
+
+  // D6 remains RX, D5 remains TX. D2 controls DE/RE for manual converters.
+  // EspSoftwareSerial toggles D2 HIGH during TX and LOW after flush/listen.
   if (cfg.rs485Mode == 1) rs485.setTransmitEnablePin(PIN_RS485_DE);
 }
 
@@ -743,7 +754,7 @@ void handleSettings() {
   b += "</select></div><div><label>Sterowanie kierunkiem RS485</label><select name='rs485mode'>"
        "<option value='0'" + String(cfg.rs485Mode == 0 ? " selected" : "") + ">Automatyczne (konwerter auto-direction)</option>"
        "<option value='1'" + String(cfg.rs485Mode == 1 ? " selected" : "") + ">Ręczne DE/RE (D2)</option>"
-       "</select><p class='muted'>Wybierz automatyczne, jeśli moduł sam przełącza nadawanie i odbiór.</p></div>"
+       "</select><p class='muted'>Auto-direction: bez sterowania D2. Tryb ręczny: D2 (DE/RE) = HIGH podczas nadawania i LOW podczas nasłuchu; D5 = TX, D6 = RX. W trybie ręcznym połącz DE i /RE razem z D2.</p></div>"
        "<div><label>Zapytania Modbus do pompy</label><select name='txenabled'>"
        "<option value='0'" + String(cfg.txEnabled == 0 ? " selected" : "") + ">Wyłączone — tylko panel i diagnostyka</option>"
        "<option value='1'" + String(cfg.txEnabled == 1 ? " selected" : "") + ">Włączone — odczyt cykliczny i ręczny skaner</option>"
