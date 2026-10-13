@@ -459,7 +459,7 @@ void sendPage(const char* tab, const String& body) {
   // Wysyłaj stronę porcjami. Nie twórz drugiej kopii całego HTML w RAM ESP8266:
   // po przejściu Ustawienia -> Odczyty duże Stringi mogły fragmentować stertę.
   static const char* const tabs[][2] = {
-    { "/", "Odczyty" }, { "/scan", "Mapa Modbus" }, { "/settings", "Ustawienia" }, { "/log", "Ramki" }, { "/diag", "Diagnostyka" }, { "/firmware", "Aktualizacja" }
+    { "/", "Odczyty" }, { "/scan", "Mapa Modbus" }, { "/settings", "Ustawienia" }, { "/send-frame", "Nadaj ramkę" }, { "/log", "Ramki" }, { "/diag", "Diagnostyka" }, { "/firmware", "Aktualizacja" }
   };
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html; charset=utf-8", "");
@@ -594,6 +594,126 @@ void handleScan() {
     }
   }
   sendPage("/scan", b);
+}
+
+// Ręczne nadawanie surowej ramki. Nic nie jest wysyłane podczas GET/otwarcia zakładki.
+String rawFrameToHex(const uint8_t* data, size_t len) {
+  return toHex(data, len);
+}
+
+void handleRawFrame() {
+  String result;
+  String submittedHex;
+  String rxHex;
+  bool sent = false;
+
+  if (server.method() == HTTP_POST) {
+    submittedHex = server.arg("frame");
+    submittedHex.trim();
+
+    if (!cfg.txEnabled) {
+      result = "ZABLOKOWANO: włącz najpierw zapytania Modbus w Ustawieniach.";
+      logFrame("RAW TX BLOCKED: TX disabled");
+    } else if (!submittedHex.length()) {
+      result = "Błąd: pole ramki jest puste.";
+    } else {
+      uint8_t frame[64];
+      size_t count = 0;
+      bool bad = false;
+      // Akceptuj spacje, tabulatory, dwukropki i myślniki jako separatory,
+      // ale każdy bajt musi składać się dokładnie z dwóch cyfr HEX.
+      String token;
+      for (size_t i = 0; i <= submittedHex.length(); i++) {
+        char ch = i < submittedHex.length() ? submittedHex[i] : ' ';
+        bool sep = ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ':' || ch == '-';
+        if (!sep) {
+          if (!isxdigit((unsigned char)ch)) { bad = true; break; }
+          token += ch;
+          if (token.length() > 2) { bad = true; break; }
+        } else if (token.length()) {
+          if (token.length() != 2 || count >= sizeof(frame)) { bad = true; break; }
+          frame[count++] = (uint8_t)strtoul(token.c_str(), nullptr, 16);
+          token = "";
+        }
+      }
+
+      if (bad || count < 4) {
+        result = "Błąd: użyj par cyfr HEX (np. 01 03 10 04 00 01 41 0A), maksymalnie 64 bajty.";
+      } else {
+        uint8_t fc = count > 1 ? frame[1] : 0;
+        bool writeFunction = fc == 5 || fc == 6 || fc == 15 || fc == 16 || fc == 22 || fc == 23;
+        if (writeFunction && server.arg("confirmwrite") != "1") {
+          result = "ZABLOKOWANO: ramka używa funkcji zapisu Modbus. Zaznacz potwierdzenie, jeśli świadomie chcesz wysłać tę komendę.";
+        } else {
+          while (rs485.available()) rs485.read();
+          delay(4);
+          rs485.write(frame, count);
+          rs485.flush();
+          logFrame("RAW TX: " + rawFrameToHex(frame, count));
+          sent = true;
+
+          // Krótki odbiór odpowiedzi/echo. To nie interpretuje ramki jako odpowiedzi Modbus.
+          uint8_t response[96];
+          size_t rxCount = 0;
+          uint32_t started = millis();
+          uint32_t lastByte = started;
+          while (millis() - started < 350 && rxCount < sizeof(response)) {
+            if (rs485.available()) {
+              int v = rs485.read();
+              if (v >= 0) {
+                response[rxCount++] = (uint8_t)v;
+                lastByte = millis();
+              }
+            } else {
+              if (rxCount && millis() - lastByte > 35) break;
+              yield();
+            }
+          }
+          if (rxCount) {
+            rxHex = rawFrameToHex(response, rxCount);
+            logFrame("RAW RX: " + rxHex);
+            result = "Ramka wysłana. Odebrano " + String(rxCount) + " bajtów (odpowiedź lub echo — sprawdź treść).";
+          } else {
+            result = "Ramka wysłana. Nie odebrano bajtów w ciągu 350 ms.";
+            logFrame("RAW RX: timeout (350 ms)");
+          }
+          mbLastRxLen = rxCount;
+          mbLastRxHex = rxHex;
+          mbLastFrameStatus = rxCount ? "Ręczna ramka: odebrano bajty; interpretacja niezweryfikowana" : "Ręczna ramka: brak RX w 350 ms";
+        }
+      }
+    }
+  }
+
+  String b = F("<div class='card'><h2>Nadaj ramkę HEX</h2>"
+    "<p class='muted'>Wysyłanie surowych bajtów przez aktualny port RS485 i parametry z Ustawień. Samo otwarcie tej zakładki niczego nie wysyła.</p>");
+  b += "<p><b>Transmisja:</b> " + String(cfg.txEnabled ? "<span class='ok'>włączona</span>" : "<span class='bad'>wyłączona</span>") +
+       " · " + String(cfg.baud) + " " + parityName(cfg.parity) + " · slave ustawiony w panelu: " + String(cfg.slave) + "</p>";
+  if (result.length()) {
+    b += "<div class='" + String(sent ? "toast" : "alert") + "'>" + result + "</div>";
+    if (sent) b += "<p><b>TX:</b> <span class='mono'>" + rxSafeHex(submittedHex) + "</span></p>";
+    if (rxHex.length()) b += "<p><b>RX:</b> <span class='mono'>" + rxHex + "</span></p>";
+  }
+  b += F("<form method='post' action='/send-frame' onsubmit=\\"return confirm('Wysłać dokładnie wpisane bajty przez RS485? Jeśli to komenda zapisu, może zmienić działanie urządzenia.');\\">"
+    "<label for='frame'>Bajty HEX</label><textarea id='frame' name='frame' rows='3' maxlength='260' placeholder='01 06 0F A0 00 84 8A 9F' required style='width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);font:14px ui-monospace,Consolas,monospace'></textarea>"
+    "<p class='muted'>Separatory: spacje, dwukropki lub myślniki. Maksymalnie 64 bajty. CRC nie jest dopisywane automatycznie.</p>"
+    "<label style='display:flex;align-items:flex-start;gap:8px;color:var(--text);margin:12px 0'><input type='checkbox' name='confirmwrite' value='1' style='width:auto;margin-top:4px'> Potwierdzam świadome wysłanie ramki z funkcją zapisu Modbus (FC05/06/0F/10/16/17), jeśli występuje.</label>"
+    "<button class='btn' type='submit' " );
+  if (!cfg.txEnabled) b += "disabled title='Włącz transmisję w Ustawieniach'";
+  b += F(">Wyślij ramkę</button></form></div>"
+    "<div class='card'><h2>Bezpieczeństwo</h2><p class='muted'>Wysyłaj wyłącznie na potwierdzonym porcie JK-BUS, nigdy na CN13A. Funkcje zapisu mogą zmienić ustawienia lub stan urządzenia. Panel nie dopisuje ani nie poprawia CRC — wysyła dokładnie wpisane bajty.</p>"
+    "<p><a class='btn ghost' href='/log'>Zobacz log TX/RX</a></p></div>");
+  sendPage("/send-frame", b);
+}
+
+// Zachowaj bezpieczny tekst wyświetlany w HTML (wejście nie jest wykonywane jako HTML).
+String rxSafeHex(const String& input) {
+  String out;
+  for (size_t i = 0; i < input.length(); i++) {
+    char ch = input[i];
+    if (isxdigit((unsigned char)ch) || ch == ' ' || ch == ':' || ch == '-' || ch == '\\t') out += ch;
+  }
+  return out;
 }
 
 void handleSettings() {
@@ -820,6 +940,8 @@ void setup() {
   server.on("/api/data", handleApi);
   server.on("/scan", handleScan);
   server.on("/settings", handleSettings);
+  server.on("/send-frame", HTTP_GET, handleRawFrame);
+  server.on("/send-frame", HTTP_POST, handleRawFrame);
   server.on("/log", handleLog);
   server.on("/firmware", handleFirmware);
   server.on("/diag", handleDiag);
