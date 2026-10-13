@@ -311,6 +311,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
       }
     }
 
+    mbLastFrameStatus = currentErr;
     if (attempt == 0) firstErr = currentErr;
     err = currentErr;
     if (attempt == 0) delay(20);
