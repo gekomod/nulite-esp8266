@@ -26,6 +26,8 @@
 #include <ArduinoOTA.h>
 #include <SoftwareSerial.h>
 #include <EEPROM.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 // ---------------- KONFIGURACJA ----------------
 // Transmisję Modbus można włączać i wyłączać w /settings; stan jest zapisywany w EEPROM.
@@ -696,7 +698,7 @@ void handleRawFrame() {
     if (sent) b += "<p><b>TX:</b> <span class='mono'>" + rxSafeHex(submittedHex) + "</span></p>";
     if (rxHex.length()) b += "<p><b>RX:</b> <span class='mono'>" + rxHex + "</span></p>";
   }
-  b += F("<form method='post' action='/send-frame' onsubmit=\\"return confirm('Wysłać dokładnie wpisane bajty przez RS485? Jeśli to komenda zapisu, może zmienić działanie urządzenia.');\\">"
+  b += F("<form method='post' action='/send-frame' onsubmit=\"return confirm('Wysłać dokładnie wpisane bajty przez RS485? Jeśli to komenda zapisu, może zmienić działanie urządzenia.');\">"
     "<label for='frame'>Bajty HEX</label><textarea id='frame' name='frame' rows='3' maxlength='260' placeholder='01 06 0F A0 00 84 8A 9F' required style='width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);font:14px ui-monospace,Consolas,monospace'></textarea>"
     "<p class='muted'>Separatory: spacje, dwukropki lub myślniki. Maksymalnie 64 bajty. CRC nie jest dopisywane automatycznie.</p>"
     "<label style='display:flex;align-items:flex-start;gap:8px;color:var(--text);margin:12px 0'><input type='checkbox' name='confirmwrite' value='1' style='width:auto;margin-top:4px'> Potwierdzam świadome wysłanie ramki z funkcją zapisu Modbus (FC05/06/0F/10/16/17), jeśli występuje.</label>"
