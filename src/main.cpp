@@ -840,7 +840,10 @@ void loop() {
   server.handleClient();
   MDNS.update();
 
-  if (millis() - lastPoll >= cfg.pollSec * 1000UL || lastPoll == 0) {
+  // Tryb bez transmisji: nie uruchamiaj cyklicznego odczytu Modbus.
+  // Serwer WWW, Wi-Fi, mDNS i OTA nadal pracują normalnie.
+  if (MODBUS_TX_ENABLED &&
+      (millis() - lastPoll >= cfg.pollSec * 1000UL || lastPoll == 0)) {
     lastPoll = millis();
     digitalWrite(LED_BUILTIN, LOW);   // LED miga przy odczycie
     pollRegisters();
