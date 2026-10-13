@@ -456,34 +456,36 @@ String fmtUptime(uint32_t s) {
 }
 
 void sendPage(const char* tab, const String& body) {
+  // Wysyłaj stronę porcjami. Nie twórz drugiej kopii całego HTML w RAM ESP8266:
+  // po przejściu Ustawienia -> Odczyty duże Stringi mogły fragmentować stertę.
   static const char* const tabs[][2] = {
     { "/", "Odczyty" }, { "/scan", "Mapa Modbus" }, { "/settings", "Ustawienia" }, { "/log", "Ramki" }, { "/diag", "Diagnostyka" }, { "/firmware", "Aktualizacja" }
   };
-  String p;
-  p.reserve(body.length() + 7000);
-  p += F("<!doctype html><html lang='pl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-         "<meta name='theme-color' content='#1e3a8a'><title>Pompa ciepła Nulite</title><style>");
-  p += FPSTR(CSS);
-  p += F("</style><script>function restartDevice(){if(!confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.'))return;const b=document.querySelector('.btn.restart');if(b){b.disabled=true;b.textContent='Restartowanie…'}fetch('/restart',{method:'POST'}).then(()=>{document.body.insertAdjacentHTML('afterbegin',\"<div style='position:fixed;z-index:9999;top:12px;left:12px;right:12px;background:#166534;color:white;padding:14px;border-radius:10px;text-align:center\">Urządzenie uruchamia się ponownie. Poczekaj 10–20 sekund.</div>\")}).catch(()=>{if(b){b.textContent='Restart wysłany';}})}</script></head><body><div class='top'><div class='wrap'><div class='brand'>");
-  p += FPSTR(LOGO_SVG);
-  p += F("<div><h1>Pompa ciepła</h1><small>Nulite 326/B2</small></div><span class='pill'><span id='dot' class='dot");
-  p += commOk ? "" : " bad";
-  p += F("'></span><span id='st'>");
-  p += commOk ? F("Komunikacja OK") : F("Brak komunikacji");
-  p += F("</span></span></div><nav>");
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html; charset=utf-8", "");
+  server.sendContent(F("<!doctype html><html lang='pl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<meta name='theme-color' content='#1e3a8a'><title>Pompa ciepła Nulite</title><style>"));
+  server.sendContent(FPSTR(CSS));
+  server.sendContent(F("</style><script>function restartDevice(){if(!confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.'))return;const b=document.querySelector('.btn.restart');if(b){b.disabled=true;b.textContent='Restartowanie…'}fetch('/restart',{method:'POST'}).then(()=>{document.body.insertAdjacentHTML('afterbegin',\"<div style='position:fixed;z-index:9999;top:12px;left:12px;right:12px;background:#166534;color:white;padding:14px;border-radius:10px;text-align:center\">Urządzenie uruchamia się ponownie. Poczekaj 10–20 sekund.</div>\")}).catch(()=>{if(b){b.textContent='Restart wysłany';}})}</script></head><body><div class='top'><div class='wrap'><div class='brand'>"));
+  server.sendContent(FPSTR(LOGO_SVG));
+  server.sendContent(F("<div><h1>Pompa ciepła</h1><small>Nulite 326/B2</small></div><span class='pill'><span id='dot' class='dot"));
+  server.sendContent(commOk ? "" : " bad");
+  server.sendContent(F("'></span><span id='st'>"));
+  server.sendContent(commOk ? F("Komunikacja OK") : F("Brak komunikacji"));
+  server.sendContent(F("</span></span></div><nav>"));
   for (auto& t : tabs) {
-    p += "<a href='" + String(t[0]) + "'" + (strcmp(t[0], tab) == 0 ? " class='on'" : "") + ">" + t[1] + "</a>";
+    String link = "<a href='" + String(t[0]) + "'" + (strcmp(t[0], tab) == 0 ? " class='on'" : "") + ">" + t[1] + "</a>";
+    server.sendContent(link);
   }
-  p += F("<a class='btn restart' href='/restart' onclick=\"return confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.')\" title='Uruchom ponownie ESP'>⟳ Restart ESP</a></nav></div></div><main>");
-  p += body;
-  p += F("<footer>NuliteESP · ");
-  p += WiFi.localIP().toString();
-  p += F(" · działa od ");
-  p += fmtUptime(millis() / 1000);
-  p += F("</footer></main></body></html>");
-  server.send(200, "text/html; charset=utf-8", p);
+  server.sendContent(F("<a class='btn restart' href='/restart' onclick=\"return confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.')\" title='Uruchom ponownie ESP'>⟳ Restart ESP</a></nav></div></div><main>"));
+  server.sendContent(body);
+  server.sendContent(F("<footer>NuliteESP · "));
+  server.sendContent(WiFi.localIP().toString());
+  server.sendContent(F(" · działa od "));
+  server.sendContent(fmtUptime(millis() / 1000));
+  server.sendContent(F("</footer></main></body></html>"));
+  server.sendContent("");
 }
-
 uint8_t regDecimals(size_t i) {
   return REGS[i].scale < 0.1f ? 2 : REGS[i].scale < 1 ? 1 : 0;
 }
