@@ -4,7 +4,7 @@
  *
  * Funkcje:
  *  - WiFi (STA), mDNS: http://nulite.local
- *  - Modbus RTU master (FC03 / FC04) przez modul MAX485 / TTL-RS485
+ *  - Modbus RTU read-only (FC03) na JK-BUS, mapa producenta 4100-4130
  *  - Strona WWW z odczytami, JSON API (/api/data), skaner rejestrow (/scan),
  *    ustawienia transmisji (/settings), podglad ramek (/log)
  *  - Aktualizacja OTA: z Arduino IDE / PlatformIO (ArduinoOTA)
@@ -47,45 +47,57 @@ const int PIN_RS485_DE = D2;
 
 // Domyslne parametry Modbus (mozna zmienic na stronie /settings)
 const uint8_t  DEF_SLAVE  = 1;
-const uint32_t  DEF_BAUD   = 4800;
+const uint32_t  DEF_BAUD   = 9600;
 const uint8_t  DEF_PARITY = 0;      // 0 = 8N1, 1 = 8E1, 2 = 8O1
-const uint16_t DEF_POLL_S = 10;     // co ile sekund odczyt
+const uint16_t DEF_POLL_S = 5;      // co ile sekund odczyt
 
-// ---------------- MAPA REJESTROW ----------------
-// Oficjalna mapa producenta FLM RS485 Modbus: P00-P83 = adresy 0-83, P84-P89 = adresy 85-90 (adres 84 pominięty),
-// C00-C66 = adresy 200-266. Dane 16-bit signed; wartość = surowa * dokładność.
-// Producent: FC03 odczyt do 8 rejestrów, FC06 zapis pojedynczego rejestru.
-// Firmware odczytuje wyłącznie statusy Cxx; nie zapisuje parametrów Pxx.
+// ---------------- OFICJALNA MAPA NULITE MODBUS ----------------
+// Dokument producenta _Modbus-20250113: rejestry 4100..4130 (0x1004..0x1022).
+// FC03, slave 1, 9600 8N1. Temperatury: (raw - 300) / 10;
+// zawory: raw - 5000; prąd wejściowy: raw / 10. Firmware nie zapisuje rejestrów.
 struct RegDef {
-  const char* name;   // nazwa wyswietlana
-  uint8_t  fc;        // 3 = holding, 4 = input
-  uint16_t addr;      // adres rejestru (od 0)
-  float    scale;     // mnoznik, np. 0.1 dla wartosci w dziesiatych czesciach
-  bool     isSigned;  // true jesli wartosc moze byc ujemna (temperatury!)
+  const char* name;
+  uint8_t fc;
+  uint16_t addr;
+  float scale;
+  int16_t offset;
   const char* unit;
 };
 
 RegDef REGS[] = {
-  // Nazwy, adresy i dokładność przepisane z oficjalnego arkusza producenta.
-  { "Temperatura wężownicy zewnętrznej",   3, 200, 0.5, true,  "°C" },
-  { "Temperatura gazu tłocznego",           3, 201, 0.5, true,  "°C" },
-  { "Temperatura otoczenia",               3, 202, 0.5, true,  "°C" },
-  { "Temperatura gazu powrotnego",         3, 203, 0.5, true,  "°C" },
-  { "Temperatura wody",                    3, 208, 0.5, true,  "°C" },
-  { "Temperatura CWU",                     3, 209, 0.5, true,  "°C" },
-  { "Przepływ wody zewnętrzny",            3, 213, 1.0, false, "" },
-  { "Przepływ wody wewnętrzny",            3, 214, 1.0, false, "" },
-  { "Ciśnienie wysokie",                   3, 217, 0.1, false, "MPa" },
-  { "Ciśnienie niskie",                    3, 218, 0.1, false, "MPa" },
-  { "Stan odszraniania",                   3, 227, 1.0, false, "" },
-  { "Sprężarka",                           3, 230, 1.0, false, "" },
-  { "Pompa wody",                          3, 233, 1.0, false, "" },
-  { "Aktualny tryb pracy",                 3, 251, 1.0, false, "" },
-  { "Częstotliwość zadana sprężarki",      3, 253, 1.0, false, "Hz" },
-  { "Prąd wejściowy sprężarki",            3, 254, 0.1, false, "A" },
-  { "Temperatura modułu zewnętrznego",     3, 255, 0.5, true,  "°C" },
-  { "Kody błędów sprężarki",               3, 259, 1.0, false, "" },
+  { "Tryb pracy i stan zasilania",         3, 0x1004, 1.0,    0, "" },
+  { "Częstotliwość sprężarki",             3, 0x1005, 1.0,    0, "Hz" },
+  { "Rejestr statusu (zarezerwowany)",     3, 0x1006, 1.0,    0, "" },
+  { "Błędy / zabezpieczenia 1",            3, 0x1007, 1.0,    0, "bitmask" },
+  { "Błędy / zabezpieczenia 2",            3, 0x1008, 1.0,    0, "bitmask" },
+  { "Błędy czujników",                     3, 0x1009, 1.0,    0, "bitmask" },
+  { "Błędy / zabezpieczenia 4",            3, 0x100A, 1.0,    0, "bitmask" },
+  { "Błędy sterownika sprężarki",          3, 0x100B, 1.0,    0, "bitmask" },
+  { "Otwarcie głównego zaworu EEX",        3, 0x100C, 1.0, 5000, "P" },
+  { "Otwarcie zaworu EVI",                 3, 0x100D, 1.0, 5000, "P" },
+  { "Prędkość wentylatora DC",             3, 0x100E, 1.0,    0, "rpm" },
+  { "Temperatura gazu tłocznego",          3, 0x100F, 0.1,  300, "°C" },
+  { "Temperatura wężownicy zewnętrznej",   3, 0x1010, 0.1,  300, "°C" },
+  { "Temperatura zewnętrzna",              3, 0x1011, 0.1,  300, "°C" },
+  { "Temperatura wejścia EVI (rezerwa)",   3, 0x1012, 0.1,  300, "°C" },
+  { "Temperatura wyjścia EVI",             3, 0x1013, 0.1,  300, "°C" },
+  { "Temperatura gazu powrotnego",         3, 0x1014, 0.1,  300, "°C" },
+  { "Rejestr zarezerwowany 4117",          3, 0x1015, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4118",          3, 0x1016, 1.0,    0, "" },
+  { "Prąd wejściowy",                      3, 0x1017, 0.1,    0, "A" },
+  { "Napięcie wejściowe",                  3, 0x1018, 1.0,    0, "V" },
+  { "Rejestr zarezerwowany 4121",          3, 0x1019, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4122",          3, 0x101A, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4123",          3, 0x101B, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4124",          3, 0x101C, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4125",          3, 0x101D, 1.0,    0, "" },
+  { "Rejestr zarezerwowany 4126",          3, 0x101E, 1.0,    0, "" },
+  { "Temperatura wody na wejściu",         3, 0x101F, 0.1,  300, "°C" },
+  { "Temperatura wody na wyjściu",         3, 0x1020, 0.1,  300, "°C" },
+  { "Temperatura wymiennika wewnętrznego", 3, 0x1021, 0.1,  300, "°C" },
+  { "Temperatura CWU",                     3, 0x1022, 0.1,  300, "°C" },
 };
+
 const size_t REG_COUNT = sizeof(REGS) / sizeof(REGS[0]);
 
 // ---------------- STAN ----------------
@@ -96,7 +108,7 @@ struct Config {
   uint8_t  parity;
   uint16_t pollSec;
 } cfg;
-const uint32_t CFG_MAGIC = 0x4E554C33;  // "NUL3": reset old EEPROM settings to the confirmed working 4800 8N1
+const uint32_t CFG_MAGIC = 0x4E554C34;  // "NUL4": reset old settings to documentation defaults 9600 8N1
 
 float    regValue[REG_COUNT];
 bool     regValid[REG_COUNT];
@@ -309,26 +321,31 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 }
 
 void pollRegisters() {
-  bool any = false;
-  for (size_t i = 0; i < REG_COUNT; i++) {
-    uint16_t raw;
-    String err;
-    if (mbRead(cfg.slave, REGS[i].fc, REGS[i].addr, 1, &raw, err)) {
-      float v = REGS[i].isSigned ? (float)(int16_t)raw : (float)raw;
-      regValue[i] = v * REGS[i].scale;
-      regValid[i] = true;
-      any = true;
-      okCount++;
-    } else {
-      regValid[i] = false;
-      errCount++;
-      lastError = String(REGS[i].name) + ": " + err;
-    }
-    delay(20);  // przerwa miedzy zapytaniami
-    server.handleClient();
-    ArduinoOTA.handle();
+  // Oficjalne zapytanie producenta: 01 03 10 04 00 1F 41 03.
+  // Jeden odczyt 31 rejestrów; żadnych funkcji zapisu.
+  uint16_t raw[31];
+  String err;
+  if (!mbRead(cfg.slave, 3, 0x1004, 31, raw, err)) {
+    commOk = false;
+    lastError = "Odczyt 4100-4130: " + err;
+    errCount++;
+    for (size_t i = 0; i < REG_COUNT; i++) regValid[i] = false;
+    return;
   }
-  commOk = any;
+  for (size_t i = 0; i < REG_COUNT; i++) {
+    uint16_t index = REGS[i].addr - 0x1004;
+    if (index >= 31) {
+      regValid[i] = false;
+      continue;
+    }
+    regValue[i] = ((float)raw[index] - (float)REGS[i].offset) * REGS[i].scale;
+    regValid[i] = true;
+  }
+  commOk = true;
+  lastError = "-";
+  okCount += REG_COUNT;
+  server.handleClient();
+  ArduinoOTA.handle();
 }
 
 // ---------------- WWW ----------------
@@ -513,66 +530,41 @@ void handleApi() {
   server.send(200, "application/json", j);
 }
 
-// Skaner: czyta blok rejestrow, przy bledzie probuje pojedynczo
+// Diagnostyczny odczyt wyłącznie oficjalnego bloku 4100-4130 / FC03.
 void handleScan() {
-  uint8_t  fc    = server.hasArg("fc") ? server.arg("fc").toInt() : 3;
-  uint16_t start = server.hasArg("start") ? server.arg("start").toInt() : 0;
-  uint16_t count = server.hasArg("count") ? server.arg("count").toInt() : 20;
-  uint8_t  slave = server.hasArg("slave") ? server.arg("slave").toInt() : cfg.slave;
-  if (fc != 4) fc = 3;
-  count = constrain(count, 1, 100);
-
-  String b = "<div class='card'><h2>Skaner rejestrów Modbus</h2><form><div class='row'>"
-             "<div><label>Adres slave</label><input name='slave' type='number' min=1 max=247 value='" + String(slave) + "'></div>"
-             "<div><label>Funkcja</label><select name='fc'><option value=3" + (fc == 3 ? " selected" : "") + ">03 · Holding</option>"
-             "<option value=4" + (fc == 4 ? " selected" : "") + ">04 · Input</option></select></div>"
-             "<div><label>Od adresu</label><input name='start' type='number' min=0 max=65535 value='" + String(start) + "'></div>"
-             "<div><label>Ilość (max 100)</label><input name='count' type='number' min=1 max=100 value='" + String(count) + "'></div>"
-             "<div><button class='btn' name='go' value='1' style='width:100%'>Czytaj</button></div></div></form>"
-             "<p class='muted'>Porównaj wartości z wyświetlaczem pompy. Temperatury w mapie mają dokładność 0,5°C, a ciśnienia 0,1 MPa. "
-             "Mapa producenta: P00–P83 (adresy 0–83), P84–P89 (adresy 85–90; brak adresu 84) to parametry; C00–C66 (adresy 200–266) to statusy. " 
-             "Jedno zapytanie FC03 może obejmować maksymalnie 8 rejestrów.</p></div>";
-
+  String b = F("<div class='card'><h2>Mapa rejestrów Nulite</h2>"
+               "<p class='muted'>Odczyt funkcją FC03 z bloku 4100-4130 (0x1004-0x1022), zgodnie z plikiem producenta. "
+               "Zapytanie wysyłane jest tylko po kliknięciu. Używaj wyłącznie na potwierdzonym porcie JK-BUS, nigdy na CN13A.</p>"
+               "<p><a class='btn' href='/scan?go=1'>Odczytaj blok 4100-4130</a></p></div>");
   if (server.hasArg("go")) {
-    String rows;
-    int found = 0;
-    const uint16_t CHUNK = 8;
-    for (uint16_t a = start; a < start + count; a += CHUNK) {
-      uint16_t n = min<uint16_t>(CHUNK, start + count - a);
-      uint16_t vals[CHUNK];
-      bool okv[CHUNK];
-      String err;
-      if (mbRead(slave, fc, a, n, vals, err)) {
-        for (uint16_t k = 0; k < n; k++) okv[k] = true;
-      } else {
-        // blok nie przeszedl - czytamy po jednym (czesc adresow moze nie istniec)
-        for (uint16_t k = 0; k < n; k++) {
-          String e2;
-          okv[k] = mbRead(slave, fc, a + k, 1, &vals[k], e2);
-          if (!okv[k]) lastError = "Skan " + String(a + k) + ": " + e2;
-          delay(15);
-          yield();
+    uint16_t vals[31];
+    String err;
+    if (mbRead(cfg.slave, 3, 0x1004, 31, vals, err)) {
+      String rows;
+      for (uint16_t k = 0; k < 31; k++) {
+        uint16_t addr = 0x1004 + k;
+        const char* name = "Rejestr bez opisu";
+        float value = vals[k];
+        const char* unit = "";
+        for (size_t i = 0; i < REG_COUNT; i++) {
+          if (REGS[i].addr == addr) {
+            name = REGS[i].name;
+            value = ((float)vals[k] - (float)REGS[i].offset) * REGS[i].scale;
+            unit = REGS[i].unit;
+            break;
+          }
         }
+        char hx[8];
+        snprintf(hx, sizeof(hx), "0x%04X", vals[k]);
+        rows += "<tr><td>" + String(4100 + k) + " <span class='muted'>" + String(addr, HEX) + "</span></td>"
+                "<td>" + String(name) + "</td><td class='mono'>" + String(vals[k]) + "</td><td class='mono'>" + hx +
+                "</td><td>" + String(value, 1) + " " + unit + "</td></tr>";
       }
-      for (uint16_t k = 0; k < n; k++) {
-        rows += "<tr><td class='mono'>" + String(a + k) + "</td>";
-        if (okv[k]) {
-          char hx[8];
-          sprintf(hx, "0x%04X", vals[k]);
-          rows += "<td><b>" + String(vals[k]) + "</b></td><td class='mono'>" + hx + "</td><td>" + String((int16_t)vals[k]) +
-                  "</td><td>" + String((int16_t)vals[k] / 10.0, 1) + "</td>";
-          found++;
-        } else {
-          rows += "<td colspan=4 class='na'>—</td>";
-        }
-        rows += "</tr>";
-      }
-      delay(15);
+      b += "<div class='card'><h2>Odpowiedź poprawna</h2><div class='tbl'><table><tr><th>Rejestr</th><th>Opis</th><th>Raw</th><th>Hex</th><th>Przeliczenie</th></tr>" + rows + "</table></div></div>";
+    } else {
+      b += "<div class='card'><h2>Brak odpowiedzi</h2><div class='alert'>" + err +
+           "</div><p class='muted'>Sprawdź okablowanie A/B, poziomy interfejsu RS485 i ustawienia 9600 8N1. Nie uruchamiaj skanowania adresów ani funkcji zapisu.</p></div>";
     }
-    b += "<div class='card'><h2>Wynik: " + String(found) + " z " + String(count) + " rejestrów odpowiedziało</h2>";
-    if (found < count) b += "<div class='alert'>Ostatni błąd: " + lastError + "</div>";
-    b += "<div class='tbl'><table><tr><th>Adres</th><th>Dziesiętnie</th><th>Hex</th><th>Ze znakiem</th><th>÷10</th></tr>" + rows +
-         "</table></div></div>";
   }
   sendPage("/scan", b);
 }
@@ -646,155 +638,25 @@ String sniff(uint32_t baud, uint8_t parity, uint32_t ms, size_t& total) {
   return toHex(buf, n);
 }
 
-// Stan skanera Modbus wykonywanego w krótkich żądaniach HTTP.
-bool wakeActive = false;
-size_t wakeBaudIndex = 0, wakeAddrIndex = 0;
-uint8_t wakeSlave = 1;
-int wakeSent = 0, wakeValid = 0, wakeReplies = 0;
-uint8_t wakeSavedSlave = 1, wakeSavedParity = 0;
-uint32_t wakeSavedBaud = 4800;
-uint16_t wakeSavedTimeout = 800;
-const uint32_t WAKE_BAUDS[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
-const uint16_t WAKE_ADDRS[] = { 0, 200, 208, 248 };
-
-void restoreWakeScan() {
-  mbTimeoutMs = wakeSavedTimeout;
-  cfg.slave = wakeSavedSlave;
-  cfg.baud = wakeSavedBaud;
-  cfg.parity = wakeSavedParity;
-  beginRs485();
-  wakeActive = false;
-}
-
-void handleWakeStep() {
-  if (!wakeActive) {
-    server.send(409, "text/plain; charset=utf-8", "Brak aktywnego skanowania. Otworz /diag?wake=1.");
-    return;
-  }
-  while (wakeBaudIndex < sizeof(WAKE_BAUDS)/sizeof(WAKE_BAUDS[0]) &&
-         WAKE_BAUDS[wakeBaudIndex] == wakeSavedBaud) wakeBaudIndex++;
-  if (wakeBaudIndex >= sizeof(WAKE_BAUDS)/sizeof(WAKE_BAUDS[0])) {
-    restoreWakeScan();
-    server.send(200, "text/plain; charset=utf-8",
-      "DONE|Wysłano: " + String(wakeSent) + "|Poprawne: " + String(wakeValid) +
-      "|Odpowiedzi/ramki: " + String(wakeReplies));
-    return;
-  }
-  uint32_t baud = WAKE_BAUDS[wakeBaudIndex];
-  if (wakeAddrIndex == 0 && wakeSlave == 1) beginRs485(baud, wakeSavedParity);
-  uint16_t value = 0;
-  String err;
-  mbLastRxLen = 0;
-  mbLastRxHex = "";
-  mbTimeoutMs = 60;
-  bool ok = mbRead(wakeSlave, 3, WAKE_ADDRS[wakeAddrIndex], 1, &value, err);
-  wakeSent++;
-  if (ok) wakeValid++;
-  if (mbLastRxLen) wakeReplies++;
-  String line = String(baud) + " baud | slave " + String(wakeSlave) +
-    " | rejestr " + String(WAKE_ADDRS[wakeAddrIndex]) + " | " +
-    (ok ? "OK wartość=" + String(value) : err) +
-    (mbLastRxHex.length() ? " | RX " + mbLastRxHex : "");
-  wakeAddrIndex++;
-  if (wakeAddrIndex >= sizeof(WAKE_ADDRS)/sizeof(WAKE_ADDRS[0])) {
-    wakeAddrIndex = 0;
-    wakeSlave++;
-    if (wakeSlave > 10) {
-      wakeSlave = 1;
-      wakeBaudIndex++;
-    }
-  }
-  server.send(200, "text/plain; charset=utf-8", line);
-}
-
 void handleDiag() {
-  String b = F("<div class='card'><h2>Nasłuch linii RS485</h2>"
-               "<p class='muted'>ESP nic nie wysyła, tylko słucha przez 3 s na każdej prędkości (1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200). Jeśli coś przychodzi bez naszych zapytań, "
-               "na tej linii rozmawiają już inne urządzenia (np. panel sterowania pompy) — wtedy ten port nie jest wolnym portem Modbus.</p>"
-               "<a class='btn' href='/diag?sniff=1'>Nasłuchuj</a></div>"
-               "<div class='card'><h2>Autowykrywanie parametrów</h2>"
-               "<p class='muted'>Wysyła zapytanie o rejestr 0 (funkcje 03 i 04) dla prędkości 2400–38400, formatów 8N1/8E1/8O1 i adresów 1–10. "
-               "Trwa ok. 1–2 minut — nie zamykaj strony. Zapytania są ograniczone do 8 rejestrów zgodnie z mapą producenta.</p>"
-               "<a class='btn' href='/diag?detect=1'>Szukaj</a></div>"
-               "<div class='card'><h2>Aktywne zapytania do pompy</h2>"
-               "<p class='muted'>Wysyła krótkie zapytania FC03 (sam odczyt pojedynczego rejestru) do slave 1–10 dla adresów 0, 200, 208 i 248. Testuje wszystkie popularne prędkości 1200–115200, pomijając aktualnie ustawioną, i zachowuje aktualny format bitów. Krótszy test ogranicza ryzyko przekroczenia limitu HTTP.</p>"
-               "<a class='btn' href='/diag?wake=1'>Wyślij zapytania FC03</a></div>");
-
-  if (server.hasArg("wake")) {
-    wakeSavedSlave = cfg.slave;
-    wakeSavedBaud = cfg.baud;
-    wakeSavedParity = cfg.parity;
-    wakeSavedTimeout = mbTimeoutMs;
-    wakeBaudIndex = 0;
-    wakeAddrIndex = 0;
-    wakeSlave = 1;
-    wakeSent = wakeValid = wakeReplies = 0;
-    wakeActive = true;
-    b += F("<div class='card'><h2>Skan Modbus FC03</h2>"
-      "<p>Test działa w krótkich żądaniach HTTP. Nie zapisuje parametrów pompy.</p>"
-      "<p id='wakeStatus'>Uruchamianie…</p><pre id='wakeLog' style='white-space:pre-wrap;max-height:55vh;overflow:auto'></pre>"
-      "<script>(async()=>{const st=document.getElementById('wakeStatus'),log=document.getElementById('wakeLog');"
-      "for(let i=0;i<400;i++){try{const r=await fetch('/wake-step?i='+i,{cache:'no-store'});"
-      "const t=await r.text();if(!r.ok){st.textContent='Błąd HTTP '+r.status+': '+t;break;}"
-      "if(t.startsWith('DONE|')){st.textContent=t.replaceAll('|',' · ');break;}"
-      "log.textContent+=t+'\\n';log.scrollTop=log.scrollHeight;st.textContent='Skan w toku — zapytań: '+(i+1);"
-      "}catch(e){st.textContent='Błąd połączenia: '+e;break;}}})();</script></div>");
-    sendPage("/diag", b);
-    return;
-  }
-
+  String b = F("<div class='card'><h2>Pasywny nasłuch RS485</h2>"
+               "<p class='muted'>Ta funkcja tylko odbiera bajty i nie wysyła komend. "
+               "Odczyt operacyjny zgodny z dokumentacją wykonuje FC03 dla bloku 4100-4130.</p>"
+               "<a class='btn' href='/diag?sniff=1'>Nasłuchuj przez 3 s na każdej prędkości</a></div>");
   if (server.hasArg("sniff")) {
     const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
     for (uint32_t bd : bauds) {
-      size_t total;
+      size_t total = 0;
       String hex = sniff(bd, 0, 3000, total);
-      rows += "<tr><td>" + String(bd) + "</td><td>" + (total ? "<b class='ok'>" + String(total) + " B</b>" : String("<span class='na'>0</span>")) +
+      rows += "<tr><td>" + String(bd) + "</td><td>" +
+              (total ? "<b class='ok'>" + String(total) + " B</b>" : String("<span class='na'>0</span>")) +
               "</td><td class='mono'>" + hex + "</td></tr>";
       ArduinoOTA.handle();
     }
     beginRs485();
     b += "<div class='card'><h2>Wynik nasłuchu</h2><div class='tbl'><table><tr><th>Prędkość</th><th>Odebrano</th><th>Pierwsze bajty</th></tr>" +
          rows + "</table></div></div>";
-  }
-
-  if (server.hasArg("detect")) {
-    const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
-    String rows;
-    int hits = 0;
-    uint16_t savedTimeout = mbTimeoutMs;
-    mbTimeoutMs = 250;
-    for (uint32_t bd : bauds) {
-      for (uint8_t par = 0; par < 3; par++) {
-        beginRs485(bd, par);
-        for (uint8_t sl = 1; sl <= 10; sl++) {
-          for (uint8_t fc = 3; fc <= 4; fc++) {
-            uint16_t v;
-            String err;
-            bool ok = mbRead(sl, fc, 0, 1, &v, err);
-            if (ok || mbLastRxLen) {
-              hits++;
-              rows += "<tr><td>" + String(bd) + " " + parityName(par) + "</td><td>" + String(sl) + "</td><td>0" + String(fc) + "</td><td>" +
-                      (ok ? "<b class='ok'>OK, wartość " + String(v) + "</b>" : err) + "</td><td class='mono'>" + mbLastRxHex + "</td></tr>";
-            }
-            delay(5);
-          }
-          ArduinoOTA.handle();
-        }
-      }
-    }
-    mbTimeoutMs = savedTimeout;
-    beginRs485();
-    b += "<div class='card'><h2>Wynik autowykrywania</h2>";
-    if (!hits) {
-      b += F("<div class='alert'>Żadna kombinacja nie dała ani jednego bajtu odpowiedzi.<br>Sprawdź: zamianę A/B, wspólną masę (GND) z pompą, "
-             "czy w menu serwisowym pompy jest włączona komunikacja Modbus / RS485 i czy to właściwe złącze.</div>");
-    } else {
-      b += "<p class='muted'>Wiersz „OK” = znaleziono właściwe ustawienia — wpisz je w zakładce Ustawienia. "
-           "Same błędy CRC oznaczają, że coś odpowiada, ale format/prędkość się nie zgadza.</p>"
-           "<div class='tbl'><table><tr><th>Transmisja</th><th>Adres</th><th>Funkcja</th><th>Wynik</th><th>Bajty</th></tr>" + rows + "</table></div>";
-    }
-    b += "</div>";
   }
   sendPage("/diag", b);
 }
@@ -918,7 +780,7 @@ void setup() {
   server.on("/log", handleLog);
   server.on("/firmware", handleFirmware);
   server.on("/diag", handleDiag);
-  server.on("/wake-step", handleWakeStep);
+
   server.onNotFound([]() { server.send(404, "text/plain", "404"); });
   server.begin();
   MDNS.addService("http", "tcp", 80);
