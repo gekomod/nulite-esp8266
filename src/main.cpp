@@ -464,7 +464,7 @@ void sendPage(const char* tab, const String& body) {
   for (auto& t : tabs) {
     p += "<a href='" + String(t[0]) + "'" + (strcmp(t[0], tab) == 0 ? " class='on'" : "") + ">" + t[1] + "</a>";
   }
-  p += F("<a class='btn restart' href='/restart' onclick='return confirm(\'Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.\')' title='Uruchom ponownie ESP'>⟳ Restart ESP</a></nav></div></div><main>");
+  p += F("<a class='btn restart' href='/restart' onclick=\"return confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.')\" title='Uruchom ponownie ESP'>⟳ Restart ESP</a></nav></div></div><main>");
   p += body;
   p += F("<footer>NuliteESP · ");
   p += WiFi.localIP().toString();
