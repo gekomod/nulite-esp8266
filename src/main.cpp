@@ -15,7 +15,7 @@
  *   MAX485 DI  -> D5 (GPIO14)  TX
  *   MAX485 DE+RE (zlaczone) -> D2 (GPIO4)
  *   MAX485 VCC -> 3V3,  GND -> GND
- *   MAX485 A/B -> zaciski A/B (485+ / 485-) sterownika pompy
+ *   MAX485 A/B -> JK-BUS A/B (RS485) — nie podlaczac do CN13A
  *   (moduly z automatycznym kierunkiem - bez DE/RE - tez dzialaja, D2 wtedy niepodlaczone)
  */
 
@@ -437,7 +437,7 @@ String fmtUptime(uint32_t s) {
 
 void sendPage(const char* tab, const String& body) {
   static const char* const tabs[][2] = {
-    { "/", "Odczyty" }, { "/scan", "Skaner" }, { "/settings", "Ustawienia" }, { "/log", "Ramki" }, { "/diag", "Diagnostyka" }, { "/firmware", "Aktualizacja" }
+    { "/", "Odczyty" }, { "/scan", "Mapa Modbus" }, { "/settings", "Ustawienia" }, { "/log", "Ramki" }, { "/diag", "Diagnostyka" }, { "/firmware", "Aktualizacja" }
   };
   String p;
   p.reserve(body.length() + 7000);
@@ -590,9 +590,9 @@ void handleSettings() {
   b += "</select></div><div><label>Odczyt co (s)</label><input name='poll' type='number' min=2 max=3600 value='" + String(cfg.pollSec) + "'></div>"
        "<div><button class='btn' style='width:100%'>Zapisz</button></div></div></form></div>"
        "<div class='card'><h2>Gdy nie ma komunikacji</h2><p class='muted'>"
-       "<b>Błąd CRC</b> — zwykle zła parzystość albo prędkość; spróbuj 8E1 lub innej prędkości.<br>"
-       "<b>Brak odpowiedzi</b> — zamień przewody A/B, sprawdź adres slave. Port RS485 na płycie może też służyć "
-       "tylko do komunikacji wewnętrznej sterownika.</p></div>";
+       "<b>Błąd CRC</b> — sprawdź prędkość i format transmisji zgodny z dokumentacją.<br>"
+       "<b>Brak odpowiedzi</b> — sprawdź A/B i adres slave. Upewnij się, że podłączono JK-BUS; nie wysyłaj zapytań na CN13A, "
+       "ponieważ jest to wewnętrzna magistrala sterownika.</p></div>";
 
   int rssi = WiFi.RSSI();
   b += "<div class='card'><h2>Urządzenie</h2><div class='stats'>"
