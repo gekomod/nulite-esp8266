@@ -596,6 +596,8 @@ void handleScan() {
   sendPage("/scan", b);
 }
 
+String rxSafeHex(const String& input);
+
 // Ręczne nadawanie surowej ramki. Nic nie jest wysyłane podczas GET/otwarcia zakładki.
 String rawFrameToHex(const uint8_t* data, size_t len) {
   return toHex(data, len);
