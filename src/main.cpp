@@ -28,10 +28,8 @@
 #include <EEPROM.h>
 
 // ---------------- KONFIGURACJA ----------------
-// TRYB BEZPIECZNY: wyłączona transmisja wychodząca do pompy.
-// Zablokowane są zarówno cykliczne odczyty, jak i ręczny skaner Modbus.
-// Odbiór/diagnostyka WWW i OTA pozostają aktywne.
-const bool MODBUS_TX_ENABLED = false;
+// Transmisję Modbus można włączać i wyłączać w /settings; stan jest zapisywany w EEPROM.
+// Domyślnie wyłączona dla bezpieczeństwa; odbiór/diagnostyka WWW i OTA pozostają aktywne.
 const char* WIFI_SSID = "Xiaomi_E9C7";
 const char* WIFI_PASS = "nowak1234";
 const char* HOSTNAME  = "nulite";
@@ -112,8 +110,9 @@ struct Config {
   uint8_t  parity;
   uint16_t pollSec;
   uint8_t rs485Mode; // 0=automatic direction, 1=manual DE/RE on D2
+  uint8_t txEnabled; // 0=Modbus TX off, 1=Modbus TX on
 } cfg;
-const uint32_t CFG_MAGIC = 0x4E554C35;  // NUL5: adds RS485 direction mode
+const uint32_t CFG_MAGIC = 0x4E554C36;  // NUL6: adds persistent Modbus TX setting
 
 float    regValue[REG_COUNT];
 bool     regValid[REG_COUNT];
@@ -136,10 +135,11 @@ void loadConfig() {
   EEPROM.begin(64);
   EEPROM.get(0, cfg);
   if (cfg.magic != CFG_MAGIC || cfg.slave == 0 || cfg.baud < 1200 || cfg.baud > 115200 || cfg.parity > 2) {
-    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S, 0 };
+    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S, 0, 0 };
   }
   if (cfg.pollSec < 2) cfg.pollSec = 2;
   if (cfg.rs485Mode > 1) cfg.rs485Mode = 0;
+  if (cfg.txEnabled > 1) cfg.txEnabled = 0;
 }
 
 void saveConfig() {
@@ -194,8 +194,8 @@ void logFrame(const String& line) {
 
 // Odczyt `count` rejestrow od `start` funkcja `fc` (3 lub 4). Zwraca true przy sukcesie.
 bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t* out, String& err) {
-  if (!MODBUS_TX_ENABLED) {
-    err = "Nadawanie Modbus wyłączone w firmware — brak zapytań wysyłanych do pompy.";
+  if (!cfg.txEnabled) {
+    err = "Nadawanie Modbus wyłączone w ustawieniach — brak zapytań wysyłanych do pompy.";
     logFrame("TX BLOCKED: Modbus transmission disabled");
     return false;
   }
@@ -601,6 +601,7 @@ void handleSettings() {
     cfg.parity  = constrain(server.arg("parity").toInt(), 0, 2);
     cfg.pollSec = constrain(server.arg("poll").toInt(), 2, 3600);
     cfg.rs485Mode = constrain(server.arg("rs485mode").toInt(), 0, 1);
+    cfg.txEnabled = constrain(server.arg("txenabled").toInt(), 0, 1);
     saveConfig();
     beginRs485();
     msg = "<div class='toast'>Zapisano ustawienia — obowiązują od razu.</div>";
@@ -616,6 +617,10 @@ void handleSettings() {
        "<option value='0'" + String(cfg.rs485Mode == 0 ? " selected" : "") + ">Automatyczne (konwerter auto-direction)</option>"
        "<option value='1'" + String(cfg.rs485Mode == 1 ? " selected" : "") + ">Ręczne DE/RE (D2)</option>"
        "</select><p class='muted'>Wybierz automatyczne, jeśli moduł sam przełącza nadawanie i odbiór.</p></div>"
+       "<div><label>Zapytania Modbus do pompy</label><select name='txenabled'>"
+       "<option value='0'" + String(cfg.txEnabled == 0 ? " selected" : "") + ">Wyłączone — tylko panel i diagnostyka</option>"
+       "<option value='1'" + String(cfg.txEnabled == 1 ? " selected" : "") + ">Włączone — odczyt cykliczny i ręczny skaner</option>"
+       "</select><p class='muted'>Włączenie zezwala na zapytania odczytu FC03/FC04. Nie wykonuje zapisów do pompy.</p></div>"
        "<div><label>Odczyt co (s)</label><input name='poll' type='number' min=2 max=3600 value='" + String(cfg.pollSec) + "'></div>"
        "<div><button class='btn' style='width:100%'>Zapisz</button></div></div></form></div>"
        "<div class='card'><h2>Gdy nie ma komunikacji</h2><p class='muted'>"
@@ -842,7 +847,7 @@ void loop() {
 
   // Tryb bez transmisji: nie uruchamiaj cyklicznego odczytu Modbus.
   // Serwer WWW, Wi-Fi, mDNS i OTA nadal pracują normalnie.
-  if (MODBUS_TX_ENABLED &&
+  if (cfg.txEnabled &&
       (millis() - lastPoll >= cfg.pollSec * 1000UL || lastPoll == 0)) {
     lastPoll = millis();
     digitalWrite(LED_BUILTIN, LOW);   // LED miga przy odczycie
