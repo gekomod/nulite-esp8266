@@ -160,6 +160,8 @@ void beginRs485() {
 uint16_t mbTimeoutMs = 800;  // czas oczekiwania na odpowiedz
 size_t   mbLastRxLen = 0;    // ile bajtow przyszlo w ostatniej transakcji (diagnostyka)
 String   mbLastRxHex;
+String   mbLastFrameStatus = "Brak odebranej ramki";
+uint32_t validFrameCount = 0, crcErrorCount = 0, timeoutCount = 0;
 
 // ---------------- MODBUS RTU ----------------
 uint16_t crc16(const uint8_t* buf, size_t len) {
@@ -279,13 +281,14 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 
     String currentErr;
     if (!candidate || n == 0) {
+      timeoutCount++;
       currentErr = "brak poprawnej odpowiedzi dla FC" + String(fc) +
                    " (odrzucono " + String(discarded) + " bajtów obcych/szumów)";
       if (noiseLen) currentErr += "; obce RX: " + toHex(noise, noiseLen);
     } else {
       logFrame("RX: " + toHex(resp, n) + (attempt ? " [ponowienie]" : ""));
       mbLastRxLen = n;
-      mbLastRxHex = toHex(resp, min<size_t>(n, 24));
+      mbLastRxHex = toHex(resp, n);
 
       if (n < 5) {
         currentErr = "niepełna ramka (" + String(n) + " B)";
@@ -293,6 +296,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
         uint16_t calculatedCrc = crc16(resp, n - 2);
         uint16_t receivedCrc = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
         if (receivedCrc != calculatedCrc) {
+          crcErrorCount++;
           char detail[80];
           snprintf(detail, sizeof(detail), "błędne CRC: odebrano %04X, wyliczono %04X", receivedCrc, calculatedCrc);
           currentErr = String(detail) + "; RX: " + toHex(resp, n);
@@ -306,11 +310,14 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
         } else {
           for (uint16_t i = 0; i < count; i++)
             out[i] = ((uint16_t)resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
+          validFrameCount++;
+          mbLastFrameStatus = "CRC OK, poprawna odpowiedź FC" + String(fc) + ", " + String(count) + " rejestrów";
           return true;
         }
       }
     }
 
+    mbLastFrameStatus = currentErr;
     mbLastFrameStatus = currentErr;
     if (attempt == 0) firstErr = currentErr;
     err = currentErr;
@@ -344,7 +351,7 @@ void pollRegisters() {
   }
   commOk = true;
   lastError = "-";
-  okCount += REG_COUNT;
+  okCount++;
   server.handleClient();
   ArduinoOTA.handle();
 }
@@ -520,6 +527,8 @@ String jsonEscape(const String& s) {
 void handleApi() {
   String j = "{\"comm\":" + String(commOk ? "true" : "false") + ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
              ",\"uptime\":" + String(millis() / 1000) + ",\"pollAgo\":" + String((millis() - lastPoll) / 1000) +
+             ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) + "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) +
+             "\",\"validFrames\":" + String(validFrameCount) + ",\"crcErrors\":" + String(crcErrorCount) + ",\"timeouts\":" + String(timeoutCount) +
              ",\"rssi\":" + String(WiFi.RSSI()) + ",\"lastError\":\"" + jsonEscape(lastError) + "\",\"values\":[";
   for (size_t i = 0; i < REG_COUNT; i++) {
     if (i) j += ",";
