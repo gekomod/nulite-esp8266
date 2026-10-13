@@ -229,6 +229,10 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 
     rs485.write(req, sizeof(req));
     rs485.flush();
+    // Po zakończeniu transmisji wymuś stan odbioru. SoftwareSerial ustawia
+    // D2 na HIGH podczas TX przez setTransmitEnablePin(); tutaj zabezpieczamy
+    // LOW na czas oczekiwania na odpowiedź z pompy.
+    if (cfg.rs485Mode == 1) digitalWrite(PIN_RS485_DE, LOW);
     logFrame("TX: " + toHex(req, sizeof(req)) + (attempt ? " [ponowienie]" : ""));
 
     const size_t expected = 5 + 2 * count;
@@ -664,6 +668,8 @@ void handleRawFrame() {
           delay(4);
           rs485.write(frame, count);
           rs485.flush();
+          // Po wysłaniu surowej ramki przełącz DE/RE z powrotem na nasłuch.
+          if (cfg.rs485Mode == 1) digitalWrite(PIN_RS485_DE, LOW);
           logFrame("RAW TX: " + rawFrameToHex(frame, count));
           sent = true;
 
