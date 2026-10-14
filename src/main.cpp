@@ -5,10 +5,8 @@
  * Funkcje:
  *  - WiFi (STA), mDNS: http://nulite.local
  *  - Modbus RTU read-only (FC03) na JK-BUS, mapa producenta 4100-4130
- *  - Strona WWW z odczytami, JSON API (/api/data), skaner rejestrow (/scan),
- *    ustawienia transmisji (/settings), podglad ramek (/log)
- *  - Aktualizacja OTA: z Arduino IDE / PlatformIO (ArduinoOTA)
- *    oraz przez przegladarke: http://nulite.local/update (plik .bin)
+ *  - JSON API dla panelu Docker: odczyty, ustawienia, logi i diagnostyka
+ *  - OTA: ArduinoOTA oraz uwierzytelniony endpoint HTTP /update
  *
  * Podlaczenie modulu MAX485 (zasilanie 3.3V!):
  *   MAX485 RO  -> D6 (GPIO12)  RX
@@ -30,7 +28,7 @@
 #include <stdlib.h>
 
 // ---------------- KONFIGURACJA ----------------
-// Transmisję Modbus można włączać i wyłączać w /settings; stan jest zapisywany w EEPROM.
+// Transmisję Modbus można włączać i wyłączać przez JSON API; stan jest zapisywany w EEPROM.
 // Domyślnie wyłączona dla bezpieczeństwa; odbiór/diagnostyka WWW i OTA pozostają aktywne.
 const char* WIFI_SSID = "Xiaomi_E9C7";
 const char* WIFI_PASS = "nowak1234";
