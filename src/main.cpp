@@ -816,31 +816,92 @@ String sniff(uint32_t baud, uint8_t parity, uint32_t ms, size_t& total) {
   return toHex(buf, n);
 }
 
+// Pasywny nasłuch pojedynczego ustawienia: żadnych zapytań Modbus nie wysyła.
 void handleDiag() {
   String b = "<div class='card'><h2>Ostatnia transakcja Modbus</h2><div class='stats'>"
              "<div><div class='k'>Długość RX</div><div class='v'>" + String(mbLastRxLen) + " B</div></div>"
              "<div><div class='k'>Poprawne ramki</div><div class='v'>" + String(validFrameCount) + "</div></div>"
              "<div><div class='k'>Błędy CRC</div><div class='v'>" + String(crcErrorCount) + "</div></div>"
              "<div><div class='k'>Brak odpowiedzi</div><div class='v'>" + String(timeoutCount) + "</div></div></div>"
-             "<p><b>Wynik:</b> " + mbLastFrameStatus + "</p><p class='mono'>" + mbLastRxHex + "</p></div>";
-  b += F("<div class='card'><h2>Pasywny nasłuch RS485</h2>"
-               "<p class='muted'>Ta funkcja tylko odbiera bajty i nie wysyła komend. "
-               "Odczyt operacyjny zgodny z dokumentacją wykonuje FC03 dla bloku 4100-4130.</p>"
-               "<a class='btn' href='/diag?sniff=1'>Nasłuchuj przez 3 s na każdej prędkości</a></div>");
+             "<p><b>Wynik:</b> " + mbLastFrameStatus + "</p><p class='mono'>" + mbLastRxHex + "</p>"
+             "<p class='muted'>TX w ustawieniach: " + String(cfg.txEnabled ? "włączone" : "wyłączone") +
+             " · RS485: " + String(cfg.rs485Mode == 1 ? "ręczne DE/RE (D2)" : "auto-direction") +
+             " · ustawienia pracy: " + String(cfg.baud) + " " + parityName(cfg.parity) + "</p></div>";
+
+  b += F("<div class='card'><h2>Test odbioru RX — bez nadawania</h2>"
+         "<p class='muted'>Ten test nie wysyła żadnych bajtów do pompy. Ustaw 9600 / 8N1 zgodnie z dokumentacją, "
+         "uruchom nasłuch i sprawdź, czy na magistrali pojawiają się bajty. Zapisuje liczbę bajtów, próbkę HEX i flagę przepełnienia bufora.</p>"
+         "<form method='get' action='/diag'><input type='hidden' name='listen' value='1'><div class='row'>"
+         "<div><label for='baud'>Prędkość</label><select id='baud' name='baud'>"
+         "<option>1200</option><option>2400</option><option>4800</option><option selected>9600</option>"
+         "<option>14400</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option></select></div>"
+         "<div><label for='parity'>Format</label><select id='parity' name='parity'><option value='0' selected>8N1</option><option value='1'>8E1</option><option value='2'>8O1</option></select></div>"
+         "<div><label for='ms'>Czas nasłuchu (ms)</label><select id='ms' name='ms'><option>1000</option><option selected>5000</option><option>10000</option><option>20000</option></select></div>"
+         "<div><button class='btn' type='submit'>Rozpocznij pasywny nasłuch</button></div></div></form>"
+         "<p><a class='btn ghost' href='/diag?sniff=1'>Skan pasywny: 9 prędkości po 3 s (8N1)</a></p></div>");
+
+  if (server.hasArg("listen")) {
+    uint32_t baud = (uint32_t)server.arg("baud").toInt();
+    uint8_t parity = (uint8_t)server.arg("parity").toInt();
+    uint32_t ms = (uint32_t)server.arg("ms").toInt();
+    const uint32_t allowed[] = {1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200};
+    bool baudOk = false;
+    for (uint8_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) if (baud == allowed[i]) baudOk = true;
+    if (!baudOk) baud = 9600;
+    if (parity > 2) parity = 0;
+    if (ms != 1000 && ms != 5000 && ms != 10000 && ms != 20000) ms = 5000;
+
+    beginRs485(baud, parity);
+    uint8_t sample[96];
+    size_t sampleLen = 0, total = 0;
+    uint32_t started = millis();
+    while (millis() - started < ms) {
+      while (rs485.available()) {
+        int v = rs485.read();
+        if (v >= 0) {
+          if (sampleLen < sizeof(sample)) sample[sampleLen++] = (uint8_t)v;
+          total++;
+        }
+      }
+      yield();
+      ArduinoOTA.handle();
+    }
+    bool overflowed = rs485.overflow();
+    String hex = toHex(sample, sampleLen);
+    String interpretation;
+    if (total == 0) {
+      interpretation = "0 bajtów: w czasie testu nie wykryto aktywności na RX. Sprawdź port, A/B, masę wspólną, poziomy logiczne i tryb konwertera.";
+    } else if (total < 5) {
+      interpretation = "Odebrano bardzo krótką próbkę. To może być szum, fragment transmisji lub niepełna ramka.";
+    } else {
+      interpretation = "Bajty docierają do ESP. Jeśli odczyt Modbus nadal nie działa, porównaj HEX, format UART, adres slave i CRC.";
+    }
+    b += "<div class='card'><h2>Wynik nasłuchu RX</h2><div class='stats'>"
+         "<div><div class='k'>Parametry</div><div class='v'>" + String(baud) + " " + parityName(parity) + "</div></div>"
+         "<div><div class='k'>Czas</div><div class='v'>" + String(ms) + " ms</div></div>"
+         "<div><div class='k'>Odebrane bajty</div><div class='v'>" + String(total) + "</div></div>"
+         "<div><div class='k'>Próbka</div><div class='v'>" + String(sampleLen) + " B</div></div>"
+         "<div><div class='k'>Przepełnienie RX</div><div class='v'>" + String(overflowed ? "<span class='bad'>TAK</span>" : "<span class='ok'>NIE</span>") + "</div></div>"
+         "</div><p><b>Interpretacja:</b> " + interpretation + "</p><p><b>Surowe bajty HEX:</b></p><pre class='term'>" + hex + "</pre>"
+         "<p class='muted'>Próbka pokazuje maksymalnie pierwsze 96 bajtów; licznik obejmuje wszystkie odebrane bajty.</p></div>";
+    logFrame("PASSIVE RX " + String(baud) + " " + parityName(parity) + ": " + String(total) + " B; overflow=" + String(overflowed ? "yes" : "no") + "; " + hex);
+    beginRs485();
+  }
+
   if (server.hasArg("sniff")) {
     const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
     for (uint32_t bd : bauds) {
       size_t total = 0;
       String hex = sniff(bd, 0, 3000, total);
-      rows += "<tr><td>" + String(bd) + "</td><td>" +
+      rows += "<tr><td>" + String(bd) + " 8N1</td><td>" +
               (total ? "<b class='ok'>" + String(total) + " B</b>" : String("<span class='na'>0</span>")) +
               "</td><td class='mono'>" + hex + "</td></tr>";
       ArduinoOTA.handle();
     }
     beginRs485();
-    b += "<div class='card'><h2>Wynik nasłuchu</h2><div class='tbl'><table><tr><th>Prędkość</th><th>Odebrano</th><th>Pierwsze bajty</th></tr>" +
-         rows + "</table></div></div>";
+    b += "<div class='card'><h2>Wynik skanu pasywnego</h2><div class='tbl'><table><tr><th>Prędkość / format</th><th>Odebrano</th><th>Pierwsze bajty HEX</th></tr>" +
+         rows + "</table></div><p class='muted'>Skan wykonuje wyłącznie nasłuch 8N1, po 3 sekundy na prędkość. Nie nadaje ramek.</p></div>";
   }
   sendPage("/diag", b);
 }
