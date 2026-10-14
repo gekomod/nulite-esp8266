@@ -383,6 +383,95 @@ void pollRegisters() {
   okCount++;
 }
 
+
+// Diagnostyka tylko-odczyt: sprawdza standardowe funkcje Modbus FC01..FC04.
+// Każde zapytanie odczytuje dokładnie 1 element; nie wysyła funkcji zapisu.
+String mbProbeRead(uint8_t fc, uint16_t address) {
+  if (!cfg.txEnabled) return "ZABLOKOWANO: włącz zapytania Modbus w Ustawieniach.";
+  if (fc < 1 || fc > 4) return "Nieobsługiwana funkcja odczytu.";
+
+  uint8_t req[8] = { cfg.slave, fc, (uint8_t)(address >> 8), (uint8_t)address, 0, 1, 0, 0 };
+  uint16_t crc = crc16(req, 6);
+  req[6] = crc & 0xFF;
+  req[7] = crc >> 8;
+
+  while (rs485.available()) rs485.read();
+  delay(5);
+  rs485.write(req, sizeof(req));
+  rs485.flush();
+  if (cfg.rs485Mode == 1) digitalWrite(PIN_RS485_DE, LOW);
+  logFrame("PROBE TX FC" + String(fc) + ": " + toHex(req, sizeof(req)));
+
+  uint8_t resp[32];
+  size_t n = 0;
+  uint32_t started = millis();
+  uint32_t lastByte = started;
+  while (millis() - started < mbTimeoutMs && n < sizeof(resp)) {
+    while (rs485.available() && n < sizeof(resp)) {
+      int v = rs485.read();
+      if (v >= 0) {
+        resp[n++] = (uint8_t)v;
+        lastByte = millis();
+      }
+    }
+    if (n && millis() - lastByte > 30) break;
+    yield();
+    ArduinoOTA.handle();
+  }
+
+  if (!n) {
+    timeoutCount++;
+    mbLastRxLen = 0;
+    mbLastRxHex = "";
+    mbLastFrameStatus = "Brak odpowiedzi na FC" + String(fc);
+    logFrame("PROBE TIMEOUT FC" + String(fc) + " address=" + String(address));
+    return "TIMEOUT — brak odpowiedzi";
+  }
+
+  String rx = toHex(resp, n);
+  mbLastRxLen = n;
+  mbLastRxHex = rx;
+  logFrame("PROBE RX FC" + String(fc) + ": " + rx);
+
+  if (n < 5) {
+    mbLastFrameStatus = "Niepełna odpowiedź FC" + String(fc);
+    return "Niepełna ramka (" + String(n) + " B): " + rx;
+  }
+  uint16_t got = (uint16_t)resp[n - 2] | ((uint16_t)resp[n - 1] << 8);
+  uint16_t calc = crc16(resp, n - 2);
+  if (got != calc) {
+    crcErrorCount++;
+    mbLastFrameStatus = "Błędne CRC w odpowiedzi FC" + String(fc);
+    return "BŁĄD CRC — RX: " + rx;
+  }
+  if (resp[0] != cfg.slave) {
+    mbLastFrameStatus = "Odpowiedź z innego adresu";
+    return "Inny adres slave (" + String(resp[0]) + "): " + rx;
+  }
+  if (resp[1] == (uint8_t)(fc | 0x80)) {
+    String result = "Wyjątek Modbus: kod " + String(resp[2]);
+    if (resp[2] == 1) result += " (illegal function)";
+    if (resp[2] == 2) result += " (illegal data address)";
+    if (resp[2] == 3) result += " (illegal data value)";
+    mbLastFrameStatus = result;
+    return result + " — " + rx;
+  }
+  if (resp[1] != fc) {
+    mbLastFrameStatus = "Nieoczekiwana funkcja odpowiedzi";
+    return "Nieoczekiwana funkcja: " + String(resp[1]) + " — " + rx;
+  }
+  uint8_t expectedBytes = (fc <= 2) ? 1 : 2;
+  if (resp[2] != expectedBytes || n != (size_t)(5 + expectedBytes)) {
+    mbLastFrameStatus = "Nieoczekiwana długość odpowiedzi";
+    return "Nieoczekiwana długość (" + String(n) + " B) — " + rx;
+  }
+  validFrameCount++;
+  mbLastFrameStatus = "CRC OK, odpowiedź FC" + String(fc);
+  if (fc <= 2) return "OK — bit/stan = " + String((resp[3] & 1) ? "1" : "0") + " — " + rx;
+  uint16_t value = ((uint16_t)resp[3] << 8) | resp[4];
+  return "OK — wartość rejestru = " + String(value) + " (0x" + String(value, HEX) + ") — " + rx;
+}
+
 // ---------------- WWW ----------------
 const char CSS[] PROGMEM = R"CSS(
 :root{--bg:#eef2f7;--card:#fff;--text:#0f1b2d;--muted:#64748b;--line:#e2e8f0;--accent:#2563eb;--hot:#f97316;--cold:#0ea5e9;--ok:#16a34a;--bad:#dc2626;--chip:#f1f5f9;--shadow:0 1px 2px rgba(15,27,45,.05),0 6px 20px rgba(15,27,45,.07)}
@@ -827,6 +916,30 @@ void handleDiag() {
              "<p class='muted'>TX w ustawieniach: " + String(cfg.txEnabled ? "włączone" : "wyłączone") +
              " · RS485: " + String(cfg.rs485Mode == 1 ? "ręczne DE/RE (D2)" : "auto-direction") +
              " · ustawienia pracy: " + String(cfg.baud) + " " + parityName(cfg.parity) + "</p></div>";
+
+  b += F("<div class='card'><h2>Aktywny test wszystkich funkcji odczytu Modbus</h2>"
+         "<p class='muted'>Po kliknięciu wykonuje cztery pojedyncze zapytania tylko-odczyt: FC01 (coils), FC02 (discrete inputs), FC03 (holding registers), FC04 (input registers). Nie używa funkcji zapisu. Adres wpisz dziesiętnie; test każdej funkcji sprawdza jeden element pod tym samym adresem.</p>"
+         "<form method='get' action='/diag' onsubmit=\"return confirm('Wysłać 4 zapytania Modbus wyłącznie odczytujące do pompy?');\">"
+         "<input type='hidden' name='probe' value='1'><div class='row'>"
+         "<div><label for='probeaddr'>Adres początkowy (dziesiętnie)</label><input id='probeaddr' name='addr' type='number' min='0' max='65535' value='4100' required></div>"
+         "<div><button class='btn' type='submit'>Sprawdź FC01, FC02, FC03 i FC04</button></div></div></form>"
+         "<p class='muted'>Wymaga włączenia transmisji w Ustawieniach. Test jest wykonywany wyłącznie po kliknięciu. FC01/FC02 i FC03/FC04 korzystają z różnych przestrzeni adresowych, więc brak odpowiedzi lub wyjątek dla jednej funkcji nie dowodzi sam w sobie awarii portu.</p></div>");
+
+  if (server.hasArg("probe")) {
+    uint32_t rawAddr = (uint32_t)server.arg("addr").toInt();
+    uint16_t addr = (uint16_t)constrain(rawAddr, 0UL, 65535UL);
+    const uint8_t fcs[] = {1, 2, 3, 4};
+    const char* names[] = {"FC01 — Coils (bity odczytu/zapisu)", "FC02 — Discrete Inputs (wejścia bitowe)", "FC03 — Holding Registers (rejestry 16-bit)", "FC04 — Input Registers (rejestry wejściowe)"};
+    String rows;
+    for (uint8_t i = 0; i < 4; i++) {
+      String result = mbProbeRead(fcs[i], addr);
+      rows += "<tr><td>" + String(names[i]) + "</td><td class='mono'>" + String(addr) + " (0x" + String(addr, HEX) + ")</td><td>" + result + "</td></tr>";
+      yield();
+      ArduinoOTA.handle();
+    }
+    beginRs485();
+    b += "<div class='card'><h2>Wyniki testu funkcji odczytu</h2><div class='tbl'><table><tr><th>Funkcja</th><th>Adres</th><th>Wynik</th></tr>" + rows + "</table></div><p><a class='btn ghost' href='/log'>Pełne ramki TX/RX w logu</a></p></div>";
+  }
 
   b += F("<div class='card'><h2>Test odbioru RX — bez nadawania</h2>"
          "<p class='muted'>Ten test nie wysyła żadnych bajtów do pompy. Ustaw 9600 / 8N1 zgodnie z dokumentacją, "
