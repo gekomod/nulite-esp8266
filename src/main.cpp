@@ -166,7 +166,7 @@ void beginRs485(uint32_t baud, uint8_t parity) {
   }
 
   EspSoftwareSerial::Config c = parity == 1 ? SWSERIAL_8E1 : parity == 2 ? SWSERIAL_8O1 : SWSERIAL_8N1;
-  rs485.begin(baud, c, PIN_RS485_RX, PIN_RS485_TX, false, 256);
+  rs485.begin(baud, c, PIN_RS485_RX, PIN_RS485_TX, false, 512);
 
   // D6 remains RX, D5 remains TX. D2 controls DE/RE for manual converters.
   // EspSoftwareSerial toggles D2 HIGH during TX and LOW after flush/listen.
@@ -470,6 +470,58 @@ String mbProbeRead(uint8_t fc, uint16_t address) {
   if (fc <= 2) return "OK — bit/stan = " + String((resp[3] & 1) ? "1" : "0") + " — " + rx;
   uint16_t value = ((uint16_t)resp[3] << 8) | resp[4];
   return "OK — wartość rejestru = " + String(value) + " (0x" + String(value, HEX) + ") — " + rx;
+}
+
+// Analiza pasywnego zrzutu: szuka ramek Modbus RTU z poprawnym CRC.
+// Nie zakłada, że każda ramka jest odpowiedzią — na magistrali może być też zapytanie mastera.
+String analyzePassiveFrames(const uint8_t* data, size_t len) {
+  String out;
+  uint16_t valid = 0;
+  for (size_t i = 0; i + 4 < len; i++) {
+    uint8_t fc = data[i + 1];
+    size_t frameLen = 0;
+    if (fc == 3 || fc == 4) {
+      // FC03/FC04 request: 8 bytes; response: address, FC, byte count, data, CRC.
+      if (i + 8 <= len) {
+        uint16_t requestCrc = crc16(data + i, 6);
+        uint16_t requestGot = (uint16_t)data[i + 6] | ((uint16_t)data[i + 7] << 8);
+        if (requestCrc == requestGot) frameLen = 8;
+      }
+      if (!frameLen && i + 5 <= len) {
+        uint8_t byteCount = data[i + 2];
+        size_t responseLen = (size_t)byteCount + 5;
+        if (byteCount > 0 && responseLen <= 260 && i + responseLen <= len) {
+          uint16_t responseCrc = crc16(data + i, responseLen - 2);
+          uint16_t responseGot = (uint16_t)data[i + responseLen - 2] |
+                                 ((uint16_t)data[i + responseLen - 1] << 8);
+          if (responseCrc == responseGot) frameLen = responseLen;
+        }
+      }
+    } else if (fc == 1 || fc == 2) {
+      if (i + 8 <= len) {
+        uint16_t requestCrc = crc16(data + i, 6);
+        uint16_t requestGot = (uint16_t)data[i + 6] | ((uint16_t)data[i + 7] << 8);
+        if (requestCrc == requestGot) frameLen = 8;
+      }
+      if (!frameLen && i + 5 <= len) {
+        size_t responseLen = (size_t)data[i + 2] + 5;
+        if (data[i + 2] > 0 && responseLen <= 260 && i + responseLen <= len) {
+          uint16_t responseCrc = crc16(data + i, responseLen - 2);
+          uint16_t responseGot = (uint16_t)data[i + responseLen - 2] |
+                                 ((uint16_t)data[i + responseLen - 1] << 8);
+          if (responseCrc == responseGot) frameLen = responseLen;
+        }
+      }
+    }
+    if (frameLen) {
+      out += String(valid + 1) + ". offset " + String(i) + ", " +
+             String(frameLen) + " B: " + toHex(data + i, frameLen) + "\\n";
+      valid++;
+      i += frameLen - 1;
+    }
+  }
+  if (!valid) return "Nie znaleziono kompletnej ramki FC01-FC04 z poprawnym CRC w próbce. To nie wyklucza ramek uciętych lub ramek innych funkcji.\\n";
+  return "Znalezione kandydaty z poprawnym CRC: " + String(valid) + "\\n" + out;
 }
 
 // ---------------- WWW ----------------
@@ -890,7 +942,7 @@ void handleLog() {
 // Nasluch: ESP nic nie wysyla, tylko zbiera bajty z linii przez `ms` milisekund
 String sniff(uint32_t baud, uint8_t parity, uint32_t ms, size_t& total) {
   beginRs485(baud, parity);
-  uint8_t buf[48];
+  uint8_t buf[512];
   size_t n = 0;
   total = 0;
   uint32_t t0 = millis();
@@ -965,7 +1017,7 @@ void handleDiag() {
     if (ms != 1000 && ms != 5000 && ms != 10000 && ms != 20000) ms = 5000;
 
     beginRs485(baud, parity);
-    uint8_t sample[96];
+    uint8_t sample[512];
     size_t sampleLen = 0, total = 0;
     uint32_t started = millis();
     while (millis() - started < ms) {
@@ -995,8 +1047,8 @@ void handleDiag() {
          "<div><div class='k'>Odebrane bajty</div><div class='v'>" + String(total) + "</div></div>"
          "<div><div class='k'>Próbka</div><div class='v'>" + String(sampleLen) + " B</div></div>"
          "<div><div class='k'>Przepełnienie RX</div><div class='v'>" + String(overflowed ? "<span class='bad'>TAK</span>" : "<span class='ok'>NIE</span>") + "</div></div>"
-         "</div><p><b>Interpretacja:</b> " + interpretation + "</p><p><b>Surowe bajty HEX:</b></p><pre class='term'>" + hex + "</pre>"
-         "<p class='muted'>Próbka pokazuje maksymalnie pierwsze 96 bajtów; licznik obejmuje wszystkie odebrane bajty.</p></div>";
+         "</div><p><b>Interpretacja:</b> " + interpretation + "</p><p><b>Analiza ramek (tylko próbka):</b></p><pre class='term'>" + analyzePassiveFrames(sample, sampleLen) + "</pre><p><b>Surowe bajty HEX:</b></p><pre class='term'>" + hex + "</pre>"
+         "<p class='muted'>Próbka pokazuje maksymalnie pierwsze 512 bajtów; licznik obejmuje wszystkie odebrane bajty.</p></div>";
     logFrame("PASSIVE RX " + String(baud) + " " + parityName(parity) + ": " + String(total) + " B; overflow=" + String(overflowed ? "yes" : "no") + "; " + hex);
     beginRs485();
   }
