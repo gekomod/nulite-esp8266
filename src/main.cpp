@@ -550,6 +550,22 @@ void handleScanApi() {
       ",\"name\":\""+jsonEscape(name)+"\",\"value\":"+String(value,2)+",\"unit\":\""+jsonEscape(unit)+"\"}";if(k%5==4)yield();}
   j+="]}";sendJson(200,j);
 }
+void handleProbeApi() {
+  if (server.method() != HTTP_POST || !server.hasArg("addr")) {
+    sendJson(400, "{\"ok\":false,\"error\":\"Wymagany POST z polem addr\"}"); return;
+  }
+  long address=server.arg("addr").toInt();
+  if(address<0 || address>65535) { sendJson(400,"{\"ok\":false,\"error\":\"Adres poza zakresem\"}"); return; }
+  String j="{\"address\":"+String(address)+",\"results\":[";
+  const uint8_t fcs[]={1,2,3,4};
+  for(uint8_t i=0;i<4;i++) {
+    if(i) j+=",";
+    String result=mbProbeRead(fcs[i],(uint16_t)address);
+    j+="{\"fc\":"+String(fcs[i])+",\"result\":\""+jsonEscape(result)+"\"}";
+    yield();
+  }
+  j+="]}"; sendJson(200,j);
+}
 void handleDiagnosticsApi() {
   String j="{\"device\":\"nulite-esp8266\",\"uptime\":"+String(millis()/1000)+
     ",\"wifi\":{\"connected\":"+String(WiFi.status()==WL_CONNECTED?"true":"false")+
@@ -667,6 +683,7 @@ void setup() {
   server.on("/api/v1/config/device", HTTP_POST, handleDeviceConfigApi);
   server.on("/api/v1/log", HTTP_GET, handleLogApi);
   server.on("/api/v1/scan", HTTP_POST, handleScanApi);
+  server.on("/api/v1/diagnostics/probe", HTTP_POST, handleProbeApi);
   server.on("/api/v1/restart", HTTP_POST, []() {
     sendJson(200, "{\"ok\":true,\"message\":\"restart scheduled\"}");
     delay(300);
