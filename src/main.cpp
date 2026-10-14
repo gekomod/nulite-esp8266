@@ -29,7 +29,7 @@
 
 // ---------------- KONFIGURACJA ----------------
 // Transmisję Modbus można włączać i wyłączać przez JSON API; stan jest zapisywany w EEPROM.
-// Domyślnie wyłączona dla bezpieczeństwa; odbiór/diagnostyka WWW i OTA pozostają aktywne.
+// Odczyt jest włączony domyślnie; firmware wysyła wyłącznie funkcje odczytu Modbus.
 const char* WIFI_SSID = "Xiaomi_E9C7";
 const char* WIFI_PASS = "nowak1234";
 const char* HOSTNAME  = "nulite";
@@ -49,7 +49,7 @@ const int PIN_RS485_DE = D2;
 
 // Domyslne parametry Modbus (mozna zmienic na stronie /settings)
 const uint8_t  DEF_SLAVE  = 1;
-const uint32_t  DEF_BAUD   = 9600;
+const uint32_t  DEF_BAUD   = 4800; // wcześniejsza konfiguracja, przy której panel odbierał ramki
 const uint8_t  DEF_PARITY = 0;      // 0 = 8N1, 1 = 8E1, 2 = 8O1
 const uint16_t DEF_POLL_S = 5;      // co ile sekund odczyt
 
@@ -141,7 +141,7 @@ void loadConfig() {
   EEPROM.begin(64);
   EEPROM.get(0, cfg);
   if (cfg.magic != CFG_MAGIC || cfg.slave == 0 || cfg.baud < 1200 || cfg.baud > 115200 || cfg.parity > 2) {
-    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S, 0, 0 };
+    cfg = { CFG_MAGIC, DEF_SLAVE, DEF_BAUD, DEF_PARITY, DEF_POLL_S, 0, 1 };
   }
   if (cfg.pollSec < 2) cfg.pollSec = 2;
   if (cfg.rs485Mode > 1) cfg.rs485Mode = 0;
