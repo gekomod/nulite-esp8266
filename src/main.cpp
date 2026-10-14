@@ -571,7 +571,8 @@ void sendPage(const char* tab, const String& body) {
   server.send(200, "text/html; charset=utf-8", "");
   server.sendContent(F("<!doctype html><html lang='pl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
          "<meta name='theme-color' content='#1e3a8a'><title>Pompa ciepła Nulite</title><style>"));
-  server.sendContent(FPSTR(CSS));
+  // CSS is stored in flash (PROGMEM); send it directly without creating a heap String.
+  server.sendContent_P(CSS, sizeof(CSS) - 1);
   server.sendContent(F("</style><script>function restartDevice(){if(!confirm('Uruchomić ponownie ESP8266? Odczyt pompy będzie chwilowo niedostępny.'))return;const b=document.querySelector('.btn.restart');if(b){b.disabled=true;b.textContent='Restartowanie…'}fetch('/restart',{method:'POST'}).then(()=>{document.body.insertAdjacentHTML('afterbegin',\"<div style='position:fixed;z-index:9999;top:12px;left:12px;right:12px;background:#166534;color:white;padding:14px;border-radius:10px;text-align:center\">Urządzenie uruchamia się ponownie. Poczekaj 10–20 sekund.</div>\")}).catch(()=>{if(b){b.textContent='Restart wysłany';}})}</script></head><body><div class='top'><div class='wrap'><div class='brand'>"));
   server.sendContent(FPSTR(LOGO_SVG));
   server.sendContent(F("<div><h1>Pompa ciepła</h1><small>Nulite 326/B2</small></div><span class='pill'><span id='dot' class='dot"));
