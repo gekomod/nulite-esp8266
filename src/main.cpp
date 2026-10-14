@@ -598,7 +598,9 @@ uint8_t regDecimals(size_t i) {
 
 void handleRoot() {
   String b;
-  b.reserve(6000);
+  // Strona odczytów zawiera 31 kart i skrypt odświeżania; zarezerwuj miejsce
+  // z góry, aby uniknąć wielokrotnych realokacji String i fragmentacji sterty.
+  b.reserve(14000);
   b += "<div id='al' class='alert' style='display:" + String(commOk ? "none" : "block") + "'>" + lastError + "</div>";
   b += "<div class='tiles' id='tiles'>";
   for (size_t i = 0; i < REG_COUNT; i++) {
