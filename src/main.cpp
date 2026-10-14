@@ -600,7 +600,7 @@ void handleRoot() {
   String b;
   // Strona odczytów zawiera 31 kart i skrypt odświeżania; zarezerwuj miejsce
   // z góry, aby uniknąć wielokrotnych realokacji String i fragmentacji sterty.
-  b.reserve(14000);
+  b.reserve(6000);
   b += "<div id='al' class='alert' style='display:" + String(commOk ? "none" : "block") + "'>" + lastError + "</div>";
   b += "<div class='tiles' id='tiles'>";
   for (size_t i = 0; i < REG_COUNT; i++) {
@@ -649,7 +649,7 @@ String jsonEscape(const String& s) {
 
 void handleApi() {
   String j;
-  j.reserve(5000);
+  j.reserve(2000);
   j = "{\"comm\":" + String(commOk ? "true" : "false") + ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
              ",\"uptime\":" + String(millis() / 1000) + ",\"pollAgo\":" + String((millis() - lastPoll) / 1000) +
              ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) + "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) +
@@ -672,12 +672,12 @@ void handleScan() {
                "Zapytanie wysyłane jest tylko po kliknięciu. Używaj wyłącznie na potwierdzonym porcie JK-BUS, nigdy na CN13A.</p>"
                "<p><a class='btn' href='/scan?go=1'>Odczytaj blok 4100-4130</a></p></div>");
   if (server.hasArg("go")) {
-    b.reserve(6500);
+    b.reserve(4000);
     uint16_t vals[31];
     String err;
     if (mbRead(cfg.slave, 3, 0x1004, 31, vals, err)) {
       String rows;
-      rows.reserve(3600);
+      rows.reserve(900);
       for (uint16_t k = 0; k < 31; k++) {
         uint16_t addr = 0x1004 + k;
         const char* name = "Rejestr bez opisu";
@@ -930,7 +930,7 @@ void handleDiag() {
          "<p class='muted'>Wymaga włączenia transmisji w Ustawieniach. Test jest wykonywany wyłącznie po kliknięciu. FC01/FC02 i FC03/FC04 korzystają z różnych przestrzeni adresowych, więc brak odpowiedzi lub wyjątek dla jednej funkcji nie dowodzi sam w sobie awarii portu.</p></div>");
 
   if (server.hasArg("probe")) {
-    b.reserve(7000);
+    b.reserve(4000);
     uint32_t rawAddr = (uint32_t)server.arg("addr").toInt();
     uint16_t addr = (uint16_t)constrain(rawAddr, 0UL, 65535UL);
     const uint8_t fcs[] = {1, 2, 3, 4};
@@ -1011,7 +1011,7 @@ void handleDiag() {
     b.reserve(7000);
     const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
-    rows.reserve(2400);
+    rows.reserve(1200);
     for (uint32_t bd : bauds) {
       size_t total = 0;
       String hex = sniff(bd, 0, 3000, total);
