@@ -181,7 +181,7 @@ void beginRs485() {
   beginRs485(cfg.baud, cfg.parity);
 }
 
-uint16_t mbTimeoutMs = 800;  // czas oczekiwania na odpowiedz
+uint16_t mbTimeoutMs = 250;  // krótki timeout, żeby serwer WWW/OTA nie był długo blokowany
 size_t   mbLastRxLen = 0;    // ile bajtow przyszlo w ostatniej transakcji (diagnostyka)
 String   mbLastRxHex;
 String   mbLastFrameStatus = "Brak odebranej ramki";
@@ -227,7 +227,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
   req[7] = crc >> 8;
 
   String firstErr;
-  for (uint8_t attempt = 0; attempt < 2; attempt++) {
+  for (uint8_t attempt = 0; attempt < 1; attempt++) {
     while (rs485.available()) rs485.read();
     delay(4); // cisza między transakcjami RTU
 
