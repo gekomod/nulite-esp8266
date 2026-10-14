@@ -518,7 +518,7 @@ void sendJson(int status, const String& body) {
   server.send(status, "application/json; charset=utf-8", body);
 }
 void handleApi() {
-  String j; j.reserve(2600);
+  String j; j.reserve(5000);
   j = "{\"device\":\"nulite-esp8266\",\"comm\":" + String(commOk ? "true" : "false") +
       ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
       ",\"uptime\":" + String(millis()/1000) + ",\"pollAgo\":" + String((millis()-lastPoll)/1000) +
