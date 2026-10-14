@@ -1048,6 +1048,81 @@ void handleFirmware() {
   sendPage("/firmware", b);
 }
 
+// ---------------- JSON API dla panelu Docker ----------------
+// Interfejs użytkownika docelowo działa w Dockerze. Te endpointy zastępują
+// formularze starej strony ESP; OTA pozostaje osobnym, uwierzytelnionym kanałem.
+String jsonEscape(const String& s) {
+  String o;
+  for (char c : s) {
+    if (c == '"' || c == '\\') o += '\\';
+    if (c == '\n') { o += "\\n"; continue; }
+    if (c == '\r') { o += "\\r"; continue; }
+    if (c == '\t') { o += "\\t"; continue; }
+    o += c;
+  }
+  return o;
+}
+void sendJson(int status, const String& body) {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(status, "application/json; charset=utf-8", body);
+}
+void handleDeviceConfigApi() {
+  if (server.method() == HTTP_POST) {
+    long slave=server.arg("slave").toInt(), baud=server.arg("baud").toInt();
+    long parity=server.arg("parity").toInt(), poll=server.arg("poll").toInt();
+    long mode=server.arg("rs485mode").toInt(), tx=server.arg("txenabled").toInt();
+    const uint32_t allowed[] = {1200,2400,4800,9600,14400,19200,38400,57600,115200};
+    bool baudOK=false; for (uint32_t b:allowed) if (baud==(long)b) baudOK=true;
+    if (slave<1 || slave>247 || !baudOK || parity<0 || parity>2 ||
+        poll<2 || poll>3600 || mode<0 || mode>1 || tx<0 || tx>1) {
+      sendJson(400, "{\"ok\":false,\"error\":\"Nieprawidłowe parametry konfiguracji\"}"); return;
+    }
+    cfg.slave=(uint8_t)slave; cfg.baud=(uint32_t)baud; cfg.parity=(uint8_t)parity;
+    cfg.pollSec=(uint16_t)poll; cfg.rs485Mode=(uint8_t)mode; cfg.txEnabled=(uint8_t)tx;
+    saveConfig(); beginRs485();
+  }
+  String j="{\"slave\":"+String(cfg.slave)+",\"baud\":"+String(cfg.baud)+
+    ",\"parity\":"+String(cfg.parity)+",\"format\":\""+parityName(cfg.parity)+
+    "\",\"pollSec\":"+String(cfg.pollSec)+",\"rs485Mode\":"+String(cfg.rs485Mode)+
+    ",\"txEnabled\":"+String(cfg.txEnabled?"true":"false")+
+    ",\"wifi\":{\"connected\":"+String(WiFi.status()==WL_CONNECTED?"true":"false")+
+    ",\"ssid\":\""+jsonEscape(WiFi.SSID())+"\",\"ip\":\""+WiFi.localIP().toString()+
+    "\",\"rssi\":"+String(WiFi.RSSI())+"},\"freeHeap\":"+String(ESP.getFreeHeap())+"}";
+  sendJson(200,j);
+}
+void handleLogApi() {
+  String j="{\"items\":["; bool first=true;
+  for(int i=0;i<LOG_SIZE;i++){const String& line=frameLog[(logPos+i)%LOG_SIZE];if(!line.length())continue;
+    if(!first)j+=",";first=false;j+="\""+jsonEscape(line)+"\"";}
+  j+="]}"; sendJson(200,j);
+}
+void handleScanApi() {
+  if(server.method()!=HTTP_POST){sendJson(405,"{\"error\":\"Skan uruchamiany wyłącznie przez POST\"}");return;}
+  uint16_t raw[31]; String err;
+  if(!mbRead(cfg.slave,3,0x1004,31,raw,err)){sendJson(502,"{\"ok\":false,\"error\":\""+jsonEscape(err)+"\"}");return;}
+  String j="{\"ok\":true,\"start\":4100,\"count\":31,\"values\":[";
+  for(uint16_t k=0;k<31;k++){if(k)j+=",";uint16_t addr=0x1004+k;const char* name="Rejestr bez opisu";float value=raw[k];const char* unit="";
+    for(size_t i=0;i<REG_COUNT;i++)if(REGS[i].addr==addr){name=REGS[i].name;value=((float)raw[k]-(float)REGS[i].offset)*REGS[i].scale;unit=REGS[i].unit;break;}
+    j+="{\"register\":"+String(4100+k)+",\"addr\":"+String(addr)+",\"raw\":"+String(raw[k])+
+      ",\"name\":\""+jsonEscape(name)+"\",\"value\":"+String(value,2)+",\"unit\":\""+jsonEscape(unit)+"\"}";if(k%5==4)yield();}
+  j+="]}";sendJson(200,j);
+}
+void handleDiagnosticsApi() {
+  String j="{\"device\":\"nulite-esp8266\",\"uptime\":"+String(millis()/1000)+
+    ",\"wifi\":{\"connected\":"+String(WiFi.status()==WL_CONNECTED?"true":"false")+
+    ",\"ssid\":\""+jsonEscape(WiFi.SSID())+"\",\"ip\":\""+WiFi.localIP().toString()+
+    "\",\"rssi\":"+String(WiFi.RSSI())+"},\"heap\":{\"free\":"+String(ESP.getFreeHeap())+
+    ",\"maxBlock\":"+String(ESP.getMaxFreeBlockSize())+"},\"modbus\":{\"slave\":"+String(cfg.slave)+
+    ",\"baud\":"+String(cfg.baud)+",\"format\":\""+parityName(cfg.parity)+
+    "\",\"txEnabled\":"+String(cfg.txEnabled?"true":"false")+
+    ",\"rs485Mode\":\""+String(cfg.rs485Mode==1?"manual":"auto")+
+    "\",\"comm\":"+String(commOk?"true":"false")+",\"validFrames\":"+String(validFrameCount)+
+    ",\"crcErrors\":"+String(crcErrorCount)+",\"timeouts\":"+String(timeoutCount)+
+    ",\"rxLen\":"+String(mbLastRxLen)+",\"rxHex\":\""+jsonEscape(mbLastRxHex)+
+    "\",\"frameStatus\":\""+jsonEscape(mbLastFrameStatus)+"\",\"lastError\":\""+jsonEscape(lastError)+"\"}}";
+  sendJson(200,j);
+}
+
 // ---------------- SETUP / LOOP ----------------
 const char* wifiStatusName(wl_status_t s) {
   switch (s) {
@@ -1145,20 +1220,11 @@ void setup() {
   // Stabilne JSON API dla panelu działającego w Dockerze.
   server.on("/api/v1/data", HTTP_GET, handleApi);
   server.on("/api/v1/status", HTTP_GET, handleApi);
-  server.on("/api/v1/diagnostics", HTTP_GET, []() {
-    String j;
-    j.reserve(512);
-    j = "{\"device\":\"nulite-esp8266\",\"uptime\":" + String(millis() / 1000) +
-        ",\"wifi\":{\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
-        ",\"rssi\":" + String(WiFi.RSSI()) + "},\"modbus\":{\"slave\":" + String(cfg.slave) +
-        ",\"baud\":" + String(cfg.baud) + ",\"format\":\"" + String(parityName(cfg.parity)) +
-        "\",\"comm\":" + String(commOk ? "true" : "false") + ",\"validFrames\":" + String(validFrameCount) +
-        ",\"crcErrors\":" + String(crcErrorCount) + ",\"timeouts\":" + String(timeoutCount) +
-        ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) +
-        "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) + "\",\"lastError\":\"" +
-        jsonEscape(lastError) + "\"}}";
-    server.send(200, "application/json; charset=utf-8", j);
-  });
+  server.on("/api/v1/diagnostics", HTTP_GET, handleDiagnosticsApi);
+  server.on("/api/v1/config/device", HTTP_GET, handleDeviceConfigApi);
+  server.on("/api/v1/config/device", HTTP_POST, handleDeviceConfigApi);
+  server.on("/api/v1/log", HTTP_GET, handleLogApi);
+  server.on("/api/v1/scan", HTTP_POST, handleScanApi);
   server.on("/scan", handleScan);
   server.on("/settings", handleSettings);
   server.on("/send-frame", HTTP_GET, handleRawFrame);
