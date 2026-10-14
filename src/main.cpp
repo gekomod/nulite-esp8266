@@ -672,10 +672,12 @@ void handleScan() {
                "Zapytanie wysyłane jest tylko po kliknięciu. Używaj wyłącznie na potwierdzonym porcie JK-BUS, nigdy na CN13A.</p>"
                "<p><a class='btn' href='/scan?go=1'>Odczytaj blok 4100-4130</a></p></div>");
   if (server.hasArg("go")) {
+    b.reserve(6500);
     uint16_t vals[31];
     String err;
     if (mbRead(cfg.slave, 3, 0x1004, 31, vals, err)) {
       String rows;
+      rows.reserve(3600);
       for (uint16_t k = 0; k < 31; k++) {
         uint16_t addr = 0x1004 + k;
         const char* name = "Rejestr bez opisu";
@@ -928,11 +930,13 @@ void handleDiag() {
          "<p class='muted'>Wymaga włączenia transmisji w Ustawieniach. Test jest wykonywany wyłącznie po kliknięciu. FC01/FC02 i FC03/FC04 korzystają z różnych przestrzeni adresowych, więc brak odpowiedzi lub wyjątek dla jednej funkcji nie dowodzi sam w sobie awarii portu.</p></div>");
 
   if (server.hasArg("probe")) {
+    b.reserve(7000);
     uint32_t rawAddr = (uint32_t)server.arg("addr").toInt();
     uint16_t addr = (uint16_t)constrain(rawAddr, 0UL, 65535UL);
     const uint8_t fcs[] = {1, 2, 3, 4};
     const char* names[] = {"FC01 — Coils (bity odczytu/zapisu)", "FC02 — Discrete Inputs (wejścia bitowe)", "FC03 — Holding Registers (rejestry 16-bit)", "FC04 — Input Registers (rejestry wejściowe)"};
     String rows;
+    rows.reserve(1800);
     for (uint8_t i = 0; i < 4; i++) {
       String result = mbProbeRead(fcs[i], addr);
       rows += "<tr><td>" + String(names[i]) + "</td><td class='mono'>" + String(addr) + " (0x" + String(addr, HEX) + ")</td><td>" + result + "</td></tr>";
@@ -1004,8 +1008,10 @@ void handleDiag() {
   }
 
   if (server.hasArg("sniff")) {
+    b.reserve(7000);
     const uint32_t bauds[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200 };
     String rows;
+    rows.reserve(2400);
     for (uint32_t bd : bauds) {
       size_t total = 0;
       String hex = sniff(bd, 0, 3000, total);
