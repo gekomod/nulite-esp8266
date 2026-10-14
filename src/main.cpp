@@ -490,6 +490,27 @@ void sendJson(int status, const String& body) {
   server.sendHeader("Cache-Control", "no-store");
   server.send(status, "application/json; charset=utf-8", body);
 }
+void handleApi() {
+  String j; j.reserve(2600);
+  j = "{\"device\":\"nulite-esp8266\",\"comm\":" + String(commOk ? "true" : "false") +
+      ",\"ok\":" + String(okCount) + ",\"errors\":" + String(errCount) +
+      ",\"uptime\":" + String(millis()/1000) + ",\"pollAgo\":" + String((millis()-lastPoll)/1000) +
+      ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) +
+      "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) +
+      "\",\"validFrames\":" + String(validFrameCount) + ",\"crcErrors\":" + String(crcErrorCount) +
+      ",\"timeouts\":" + String(timeoutCount) + ",\"rssi\":" + String(WiFi.RSSI()) +
+      ",\"lastError\":\"" + jsonEscape(lastError) + "\",\"values\":[";
+  for(size_t i=0;i<REG_COUNT;i++) {
+    if(i) j+=",";
+    j+="{\"name\":\""+jsonEscape(REGS[i].name)+"\",\"fc\":"+String(REGS[i].fc)+
+       ",\"addr\":"+String(REGS[i].addr)+",\"value\":"+
+       (regValid[i]?String(regValue[i],2):String("null"))+
+       ",\"dec\":"+String(REGS[i].scale<0.1f?2:REGS[i].scale<1?1:0)+
+       ",\"unit\":\""+jsonEscape(REGS[i].unit)+"\"}";
+  }
+  j+="]}"; sendJson(200,j);
+}
+
 void handleDeviceConfigApi() {
   if (server.method() == HTTP_POST) {
     long slave=server.arg("slave").toInt(), baud=server.arg("baud").toInt();
