@@ -1142,6 +1142,23 @@ void setup() {
   httpUpdater.setup(&server, "/update", UPDATE_USER, OTA_PASS);
   server.on("/", handleRoot);
   server.on("/api/data", handleApi);
+  // Stabilne JSON API dla panelu działającego w Dockerze.
+  server.on("/api/v1/data", HTTP_GET, handleApi);
+  server.on("/api/v1/status", HTTP_GET, handleApi);
+  server.on("/api/v1/diagnostics", HTTP_GET, []() {
+    String j;
+    j.reserve(512);
+    j = "{\\"device\\":\\"nulite-esp8266\\",\\"uptime\\":" + String(millis() / 1000) +
+        ",\\"wifi\\":{\\"connected\\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
+        ",\\"rssi\\":" + String(WiFi.RSSI()) + "},\\"modbus\\":{\\"slave\\":" + String(cfg.slave) +
+        ",\\"baud\\":" + String(cfg.baud) + ",\\"format\\":\\"" + String(parityName(cfg.parity)) +
+        "\\",\\"comm\\":" + String(commOk ? "true" : "false") + ",\\"validFrames\\":" + String(validFrameCount) +
+        ",\\"crcErrors\\":" + String(crcErrorCount) + ",\\"timeouts\\":" + String(timeoutCount) +
+        ",\\"rxLen\\":" + String(mbLastRxLen) + ",\\"rxHex\\":\\"" + jsonEscape(mbLastRxHex) +
+        "\\",\\"frameStatus\\":\\"" + jsonEscape(mbLastFrameStatus) + "\\",\\"lastError\\":\\"" +
+        jsonEscape(lastError) + "\\"}}";
+    server.send(200, "application/json; charset=utf-8", j);
+  });
   server.on("/scan", handleScan);
   server.on("/settings", handleSettings);
   server.on("/send-frame", HTTP_GET, handleRawFrame);
