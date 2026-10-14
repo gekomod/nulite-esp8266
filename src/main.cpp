@@ -210,7 +210,7 @@ void logFrame(const String& line) {
 }
 
 // Odczyt `count` rejestrow od `start` funkcja `fc` (3 lub 4). Zwraca true przy sukcesie.
-bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t* out, String& err) {
+bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t* out, String& err, uint16_t* receivedCount = nullptr) {
   if (!cfg.txEnabled) {
     err = "Nadawanie Modbus wyłączone w ustawieniach — brak zapytań wysyłanych do pompy.";
     logFrame("TX BLOCKED: Modbus transmission disabled");
@@ -248,6 +248,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
     uint32_t t0 = millis(), tLast = 0;
     bool candidate = false;
     size_t target = expected;
+    uint16_t responseRegisters = count;
 
     // Szukaj początku odpowiedzi należącej do TEGO zapytania. W szczególności
     // odrzuć echo/obce ramki (np. 01 10...) zamiast liczyć ich bajty jako odpowiedź.
@@ -297,9 +298,10 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 
       resp[n++] = byteIn;
       if (n == 3 && !(resp[1] & 0x80)) {
-        // Długość pochodzi z odpowiedzi. Oczekujemy dokładnie tylu bajtów,
-        // ile przewiduje zapytanie; nie wolno zaakceptować obcej długości.
-        if (resp[2] != count * 2) {
+        // Odpowiedź może zawierać mniej rejestrów niż żądano (np. urządzenie
+        // ogranicza zakres). Akceptuj wyłącznie parzystą liczbę bajtów danych,
+        // nie większą od żądanej; CRC i długość ramki sprawdzamy poniżej.
+        if (resp[2] == 0 || (resp[2] & 1) || resp[2] > count * 2) {
           discarded += n;
           for (size_t q = 0; q < n && noiseLen < sizeof(noise); q++) noise[noiseLen++] = resp[q];
           n = 0;
@@ -307,6 +309,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
           target = expected;
           continue;
         }
+        responseRegisters = resp[2] / 2;
         target = 5 + resp[2];
       }
       if (n == target) break;
@@ -338,13 +341,22 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
         } else if (resp[1] & 0x80) {
           currentErr = "wyjątek Modbus, kod " + String(resp[2]) +
                        (resp[2] == 2 ? " (nieistniejący adres)" : "");
-        } else if (resp[2] != count * 2 || n != expected) {
+        } else if (resp[2] == 0 || (resp[2] & 1) || resp[2] > count * 2 || n != (size_t)(5 + resp[2])) {
           currentErr = "nieoczekiwana długość odpowiedzi";
+        } else if (!receivedCount && responseRegisters != count) {
+          currentErr = "poprawna ramka FC" + String(fc) + ", ale odpowiedź zawiera " +
+                       String(responseRegisters) + " z " + String(count) + " żądanych rejestrów";
         } else {
-          for (uint16_t i = 0; i < count; i++)
+          for (uint16_t i = 0; i < responseRegisters; i++)
             out[i] = ((uint16_t)resp[3 + 2 * i] << 8) | resp[4 + 2 * i];
+          if (receivedCount) *receivedCount = responseRegisters;
           validFrameCount++;
-          mbLastFrameStatus = "CRC OK, poprawna odpowiedź FC" + String(fc) + ", " + String(count) + " rejestrów";
+          mbLastFrameStatus = "CRC OK, poprawna odpowiedź FC" + String(fc) + ", " +
+                              String(responseRegisters) + " z " + String(count) + " żądanych rejestrów";
+          if (responseRegisters < count) {
+            err = "poprawna odpowiedź częściowa: " + String(responseRegisters) +
+                  " z " + String(count) + " rejestrów";
+          }
           return true;
         }
       }
@@ -364,18 +376,27 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 void pollRegisters() {
   bool anyOk = false;
   String blockErr;
-  uint16_t raw[31];
+  uint16_t raw[31] = {};
+  uint16_t receivedBlockCount = 0;
 
-  // Zachowujemy odczyt bloku producenta 4100-4130, ale jego błąd
-  // nie może blokować prób odczytu znanych wcześniej adresów 8201+.
-  if (mbRead(cfg.slave, 3, 0x1004, 31, raw, blockErr)) {
-    anyOk = true;
+  // Odpowiedź FC3 może być krótsza niż żądany blok. Oznaczaj jako poprawne
+  // tylko rejestry faktycznie zawarte w ramce; nie czytaj nieustawionej pamięci.
+  if (mbRead(cfg.slave, 3, 0x1004, 31, raw, blockErr, &receivedBlockCount)) {
+    anyOk = receivedBlockCount > 0;
     for (size_t i = 0; i < REG_COUNT; i++) {
       if (REGS[i].addr >= 0x1004 && REGS[i].addr <= 0x1022) {
         uint16_t index = REGS[i].addr - 0x1004;
-        regValue[i] = ((float)raw[index] - (float)REGS[i].offset) * REGS[i].scale;
-        regValid[i] = true;
+        if (index < receivedBlockCount) {
+          regValue[i] = ((float)raw[index] - (float)REGS[i].offset) * REGS[i].scale;
+          regValid[i] = true;
+        } else {
+          regValid[i] = false;
+        }
       }
+    }
+    if (receivedBlockCount < 31) {
+      if (blockErr.length()) blockErr += " | ";
+      blockErr += "blok 4100+: odpowiedź częściowa (" + String(receivedBlockCount) + "/31 rejestrów)";
     }
   } else {
     for (size_t i = 0; i < REG_COUNT; i++)
@@ -579,15 +600,18 @@ void handleScanApi() {
     sendJson(400, "{\"ok\":false,\"error\":\"Zakres nieprawidłowy; pojedynczy blok może mieć 1–125 rejestrów\"}");
     return;
   }
-  uint16_t raw[125];
+  uint16_t raw[125] = {};
+  uint16_t receivedCount = 0;
   String err;
-  if (!mbRead(cfg.slave, 3, (uint16_t)startReg, (uint16_t)count, raw, err)) {
+  if (!mbRead(cfg.slave, 3, (uint16_t)startReg, (uint16_t)count, raw, err, &receivedCount)) {
     sendJson(502, "{\"ok\":false,\"start\":" + String(startReg) + ",\"count\":" + String(count) +
       ",\"error\":\"" + jsonEscape(err) + "\"}");
     return;
   }
-  String j = "{\"ok\":true,\"start\":" + String(startReg) + ",\"count\":" + String(count) + ",\"values\":[";
-  for (uint16_t k = 0; k < (uint16_t)count; k++) {
+  String j = "{\"ok\":true,\"start\":" + String(startReg) + ",\"requestedCount\":" + String(count) +
+             ",\"count\":" + String(receivedCount) + ",\"partial\":" +
+             String(receivedCount < count ? "true" : "false") + ",\"values\":[";
+  for (uint16_t k = 0; k < receivedCount; k++) {
     if (k) j += ",";
     uint16_t addr = (uint16_t)(startReg + k);
     const char* name = "Rejestr bez opisu";
