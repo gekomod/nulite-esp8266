@@ -245,6 +245,11 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
     size_t discarded = 0;
     uint8_t noise[32];
     size_t noiseLen = 0;
+    // Zachowaj pełny surowy strumień tej transakcji do diagnostyki.
+    // "obce RX" jest tylko skrótem szumu i nie wystarcza do ustalenia,
+    // czy parser minął początek prawidłowej ramki.
+    uint8_t rawRx[96];
+    size_t rawRxLen = 0;
     uint32_t t0 = millis(), tLast = 0;
     bool candidate = false;
     size_t target = expected;
@@ -263,6 +268,7 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
       if (ch < 0) continue;
       uint8_t byteIn = (uint8_t)ch;
       tLast = millis();
+      if (rawRxLen < sizeof(rawRx)) rawRx[rawRxLen++] = byteIn;
 
       if (!candidate) {
         if (byteIn == slave) {
@@ -316,10 +322,15 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
     }
 
     String currentErr;
+    if (rawRxLen) {
+      logFrame("RX RAW (" + String(rawRxLen) + " B, TX addr=" + String(start) +
+               ", count=" + String(count) + "): " + toHex(rawRx, rawRxLen));
+    }
     if (!candidate || n == 0) {
       timeoutCount++;
       currentErr = "brak poprawnej odpowiedzi dla FC" + String(fc) +
-                   " (odrzucono " + String(discarded) + " bajtów obcych/szumów)";
+                   " (odrzucono " + String(discarded) + " bajtów; RX RAW=" +
+                   toHex(rawRx, rawRxLen) + ")";
       if (noiseLen) currentErr += "; obce RX: " + toHex(noise, noiseLen);
     } else {
       logFrame("RX: " + toHex(resp, n) + (attempt ? " [ponowienie]" : ""));
