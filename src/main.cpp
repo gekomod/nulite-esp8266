@@ -826,7 +826,7 @@ String rxSafeHex(const String& input) {
   String out;
   for (size_t i = 0; i < input.length(); i++) {
     char ch = input[i];
-    if (isxdigit((unsigned char)ch) || ch == ' ' || ch == ':' || ch == '-' || ch == '\\t') out += ch;
+    if (isxdigit((unsigned char)ch) || ch == ' ' || ch == ':' || ch == '-' || ch == '\t') out += ch;
   }
   return out;
 }
@@ -1148,15 +1148,15 @@ void setup() {
   server.on("/api/v1/diagnostics", HTTP_GET, []() {
     String j;
     j.reserve(512);
-    j = "{\\"device\\":\\"nulite-esp8266\\",\\"uptime\\":" + String(millis() / 1000) +
-        ",\\"wifi\\":{\\"connected\\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
-        ",\\"rssi\\":" + String(WiFi.RSSI()) + "},\\"modbus\\":{\\"slave\\":" + String(cfg.slave) +
-        ",\\"baud\\":" + String(cfg.baud) + ",\\"format\\":\\"" + String(parityName(cfg.parity)) +
-        "\\",\\"comm\\":" + String(commOk ? "true" : "false") + ",\\"validFrames\\":" + String(validFrameCount) +
-        ",\\"crcErrors\\":" + String(crcErrorCount) + ",\\"timeouts\\":" + String(timeoutCount) +
-        ",\\"rxLen\\":" + String(mbLastRxLen) + ",\\"rxHex\\":\\"" + jsonEscape(mbLastRxHex) +
-        "\\",\\"frameStatus\\":\\"" + jsonEscape(mbLastFrameStatus) + "\\",\\"lastError\\":\\"" +
-        jsonEscape(lastError) + "\\"}}";
+    j = "{\"device\":\"nulite-esp8266\",\"uptime\":" + String(millis() / 1000) +
+        ",\"wifi\":{\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
+        ",\"rssi\":" + String(WiFi.RSSI()) + "},\"modbus\":{\"slave\":" + String(cfg.slave) +
+        ",\"baud\":" + String(cfg.baud) + ",\"format\":\"" + String(parityName(cfg.parity)) +
+        "\",\"comm\":" + String(commOk ? "true" : "false") + ",\"validFrames\":" + String(validFrameCount) +
+        ",\"crcErrors\":" + String(crcErrorCount) + ",\"timeouts\":" + String(timeoutCount) +
+        ",\"rxLen\":" + String(mbLastRxLen) + ",\"rxHex\":\"" + jsonEscape(mbLastRxHex) +
+        "\",\"frameStatus\":\"" + jsonEscape(mbLastFrameStatus) + "\",\"lastError\":\"" +
+        jsonEscape(lastError) + "\"}}";
     server.send(200, "application/json; charset=utf-8", j);
   });
   server.on("/scan", handleScan);
