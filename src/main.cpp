@@ -98,6 +98,12 @@ RegDef REGS[] = {
   { "Temperatura wody na wyjściu",         3, 0x1020, 0.1,  300, "°C" },
   { "Temperatura wymiennika wewnętrznego", 3, 0x1021, 0.1,  300, "°C" },
   { "Temperatura CWU",                     3, 0x1022, 0.1,  300, "°C" },
+  // Adresy potwierdzone we wcześniejszych odczytach działającego panelu.
+  // Nazwy/skalowanie wymagają potwierdzenia z mapą producenta; pokazujemy raw.
+  { "Rejestr 8201 (surowy)",                 3, 8201,   1.0,    0, "" },
+  { "Rejestr 8203 (surowy)",                 3, 8203,   1.0,    0, "" },
+  { "Rejestr 8217 (surowy)",                 3, 8217,   1.0,    0, "" },
+  { "Rejestr 46081 (surowy)",                3, 46081,  1.0,    0, "" },
 };
 
 const size_t REG_COUNT = sizeof(REGS) / sizeof(REGS[0]);
@@ -356,31 +362,54 @@ bool mbRead(uint8_t slave, uint8_t fc, uint16_t start, uint16_t count, uint16_t*
 }
 
 void pollRegisters() {
-  // Oficjalne zapytanie producenta: 01 03 10 04 00 1F 41 03.
-  // Jeden odczyt 31 rejestrów; żadnych funkcji zapisu.
+  bool anyOk = false;
+  String blockErr;
   uint16_t raw[31];
-  String err;
-  if (!mbRead(cfg.slave, 3, 0x1004, 31, raw, err)) {
-    commOk = false;
-    lastError = "Odczyt 4100-4130: " + err;
-    errCount++;
-    for (size_t i = 0; i < REG_COUNT; i++) regValid[i] = false;
-    return;
-  }
-  for (size_t i = 0; i < REG_COUNT; i++) {
-    uint16_t index = REGS[i].addr - 0x1004;
-    if (index >= 31) {
-      regValid[i] = false;
-      continue;
-    }
-    regValue[i] = ((float)raw[index] - (float)REGS[i].offset) * REGS[i].scale;
-    regValid[i] = true;
-  }
-  commOk = true;
-  lastError = "-";
-  okCount++;
-}
 
+  // Zachowujemy odczyt bloku producenta 4100-4130, ale jego błąd
+  // nie może blokować prób odczytu znanych wcześniej adresów 8201+.
+  if (mbRead(cfg.slave, 3, 0x1004, 31, raw, blockErr)) {
+    anyOk = true;
+    for (size_t i = 0; i < REG_COUNT; i++) {
+      if (REGS[i].addr >= 0x1004 && REGS[i].addr <= 0x1022) {
+        uint16_t index = REGS[i].addr - 0x1004;
+        regValue[i] = ((float)raw[index] - (float)REGS[i].offset) * REGS[i].scale;
+        regValid[i] = true;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < REG_COUNT; i++)
+      if (REGS[i].addr >= 0x1004 && REGS[i].addr <= 0x1022) regValid[i] = false;
+  }
+
+  // Te adresy występowały w poprzednim działającym panelu. Odczytujemy je
+  // osobno, bo nie tworzą jednego ciągłego bloku Modbus.
+  for (size_t i = 0; i < REG_COUNT; i++) {
+    uint16_t addr = REGS[i].addr;
+    if (addr >= 0x1004 && addr <= 0x1022) continue;
+    uint16_t value = 0;
+    String err;
+    if (mbRead(cfg.slave, REGS[i].fc, addr, 1, &value, err)) {
+      regValue[i] = ((float)value - (float)REGS[i].offset) * REGS[i].scale;
+      regValid[i] = true;
+      anyOk = true;
+    } else {
+      regValid[i] = false;
+      if (blockErr.length()) blockErr += " | ";
+      blockErr += String(addr) + ": " + err;
+    }
+    yield();
+  }
+
+  commOk = anyOk;
+  if (anyOk) {
+    lastError = blockErr.length() ? blockErr : "-";
+    okCount++;
+  } else {
+    lastError = "Brak poprawnej odpowiedzi Modbus. " + blockErr;
+    errCount++;
+  }
+}
 
 // Diagnostyka tylko-odczyt: sprawdza standardowe funkcje Modbus FC01..FC04.
 // Każde zapytanie odczytuje dokładnie 1 element; nie wysyła funkcji zapisu.
@@ -540,15 +569,45 @@ void handleLogApi() {
   j+="]}"; sendJson(200,j);
 }
 void handleScanApi() {
-  if(server.method()!=HTTP_POST){sendJson(405,"{\"error\":\"Skan uruchamiany wyłącznie przez POST\"}");return;}
-  uint16_t raw[31]; String err;
-  if(!mbRead(cfg.slave,3,0x1004,31,raw,err)){sendJson(502,"{\"ok\":false,\"error\":\""+jsonEscape(err)+"\"}");return;}
-  String j="{\"ok\":true,\"start\":4100,\"count\":31,\"values\":[";
-  for(uint16_t k=0;k<31;k++){if(k)j+=",";uint16_t addr=0x1004+k;const char* name="Rejestr bez opisu";float value=raw[k];const char* unit="";
-    for(size_t i=0;i<REG_COUNT;i++)if(REGS[i].addr==addr){name=REGS[i].name;value=((float)raw[k]-(float)REGS[i].offset)*REGS[i].scale;unit=REGS[i].unit;break;}
-    j+="{\"register\":"+String(4100+k)+",\"addr\":"+String(addr)+",\"raw\":"+String(raw[k])+
-      ",\"name\":\""+jsonEscape(name)+"\",\"value\":"+String(value,2)+",\"unit\":\""+jsonEscape(unit)+"\"}";if(k%5==4)yield();}
-  j+="]}";sendJson(200,j);
+  if (server.method() != HTTP_POST) {
+    sendJson(405, "{\"error\":\"Skan uruchamiany wyłącznie przez POST\"}");
+    return;
+  }
+  long startReg = server.hasArg("start") ? server.arg("start").toInt() : 4100;
+  long count = server.hasArg("count") ? server.arg("count").toInt() : 31;
+  if (startReg < 0 || startReg > 65535 || count < 1 || count > 125 || startReg + count > 65536) {
+    sendJson(400, "{\"ok\":false,\"error\":\"Zakres nieprawidłowy; pojedynczy blok może mieć 1–125 rejestrów\"}");
+    return;
+  }
+  uint16_t raw[125];
+  String err;
+  if (!mbRead(cfg.slave, 3, (uint16_t)startReg, (uint16_t)count, raw, err)) {
+    sendJson(502, "{\"ok\":false,\"start\":" + String(startReg) + ",\"count\":" + String(count) +
+      ",\"error\":\"" + jsonEscape(err) + "\"}");
+    return;
+  }
+  String j = "{\"ok\":true,\"start\":" + String(startReg) + ",\"count\":" + String(count) + ",\"values\":[";
+  for (uint16_t k = 0; k < (uint16_t)count; k++) {
+    if (k) j += ",";
+    uint16_t addr = (uint16_t)(startReg + k);
+    const char* name = "Rejestr bez opisu";
+    float value = raw[k];
+    const char* unit = "";
+    for (size_t i = 0; i < REG_COUNT; i++) {
+      if (REGS[i].addr == addr) {
+        name = REGS[i].name;
+        value = ((float)raw[k] - (float)REGS[i].offset) * REGS[i].scale;
+        unit = REGS[i].unit;
+        break;
+      }
+    }
+    j += "{\"register\":" + String(addr) + ",\"addr\":" + String(addr) +
+      ",\"raw\":" + String(raw[k]) + ",\"name\":\"" + jsonEscape(name) +
+      "\",\"value\":" + String(value, 2) + ",\"unit\":\"" + jsonEscape(unit) + "\"}";
+    if (k % 5 == 4) yield();
+  }
+  j += "]}";
+  sendJson(200, j);
 }
 void handleProbeApi() {
   if (server.method() != HTTP_POST || !server.hasArg("addr")) {
